@@ -1,0 +1,108 @@
+import { TrendingUp, Users, Truck, DollarSign, AlertCircle } from 'lucide-react';
+
+export function Dashboard() {
+  const stats = [
+    { label: 'Total Revenue', value: '$45,230', change: '+12.5%', icon: DollarSign, color: 'from-green-500 to-emerald-600' },
+    { label: 'Active Orders', value: '23', change: '+8', icon: Truck, color: 'from-blue-500 to-blue-600' },
+    { label: 'Workers Booked', value: '15', change: '+3', icon: Users, color: 'from-purple-500 to-purple-600' },
+    { label: 'Services Today', value: '7', change: '+2', icon: TrendingUp, color: 'from-orange-500 to-orange-600' },
+  ];
+
+  const recentActivities = [
+    { id: 1, type: 'sale', description: 'Sold 500kg Rice to ABC Traders', time: '2 hours ago', status: 'completed' },
+    { id: 2, type: 'labor', description: 'Booked 5 harvesters for wheat field', time: '4 hours ago', status: 'confirmed' },
+    { id: 3, type: 'service', description: 'Tractor service scheduled', time: '5 hours ago', status: 'pending' },
+    { id: 4, type: 'sale', description: 'Purchased fertilizer - 200kg', time: '1 day ago', status: 'completed' },
+  ];
+
+  const upcomingTasks = [
+    { id: 1, task: 'Wheat harvesting', date: '2026-02-09', priority: 'high' },
+    { id: 2, task: 'Irrigation maintenance', date: '2026-02-10', priority: 'medium' },
+    { id: 3, task: 'Fertilizer application', date: '2026-02-12', priority: 'high' },
+    { id: 4, task: 'Equipment inspection', date: '2026-02-15', priority: 'low' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      {/* Stats Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {stats.map((stat, index) => (
+          <div key={index} className="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 p-6 border border-gray-100">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <p className="text-sm text-gray-500 mb-2">{stat.label}</p>
+                <p className="text-3xl font-bold text-gray-900 mb-1">{stat.value}</p>
+                <p className="text-sm text-green-600 font-medium">{stat.change} from last month</p>
+              </div>
+              <div className={`bg-gradient-to-br ${stat.color} p-3 rounded-xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                <stat.icon className="w-6 h-6 text-white" />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Recent Activities */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-6 border-b border-gray-100">
+            <h3 className="text-lg font-semibold text-gray-900">Recent Activities</h3>
+          </div>
+          <div className="p-6">
+            <div className="space-y-4">
+              {recentActivities.map((activity) => (
+                <div key={activity.id} className="flex items-start space-x-4 p-4 rounded-xl hover:bg-gray-50 transition-colors duration-200">
+                  <div className={`w-2 h-2 rounded-full mt-2 ${
+                    activity.status === 'completed' ? 'bg-green-500' :
+                    activity.status === 'confirmed' ? 'bg-blue-500' : 'bg-yellow-500'
+                  }`}></div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900">{activity.description}</p>
+                    <p className="text-xs text-gray-500 mt-1">{activity.time}</p>
+                  </div>
+                  <span className={`text-xs px-3 py-1 rounded-full font-medium ${
+                    activity.status === 'completed' ? 'bg-green-100 text-green-700' :
+                    activity.status === 'confirmed' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'
+                  }`}>
+                    {activity.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Upcoming Tasks */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-6 border-b border-gray-100">
+            <h3 className="text-lg font-semibold text-gray-900">Upcoming Tasks</h3>
+          </div>
+          <div className="p-6">
+            <div className="space-y-4">
+              {upcomingTasks.map((task) => (
+                <div key={task.id} className="flex items-center justify-between p-4 rounded-xl hover:bg-gray-50 transition-colors duration-200">
+                  <div className="flex items-start space-x-3 flex-1">
+                    <AlertCircle className={`w-5 h-5 mt-0.5 ${
+                      task.priority === 'high' ? 'text-red-500' :
+                      task.priority === 'medium' ? 'text-yellow-500' : 'text-gray-400'
+                    }`} />
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{task.task}</p>
+                      <p className="text-xs text-gray-500 mt-1">{task.date}</p>
+                    </div>
+                  </div>
+                  <span className={`text-xs px-3 py-1 rounded-full font-medium ${
+                    task.priority === 'high' ? 'bg-red-100 text-red-700' :
+                    task.priority === 'medium' ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-700'
+                  }`}>
+                    {task.priority}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
