@@ -7,6 +7,7 @@ import {
   loginUser,
   loginWithGoogle,
 } from '../../features/auth/api';
+import { persistSession } from '../../shared/auth/session';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -64,8 +65,7 @@ export function LoginPage() {
 
           try {
             const response = await loginWithGoogle(credential);
-            localStorage.setItem('agrihub_token', response.token);
-            localStorage.setItem('agrihub_user', JSON.stringify(response.user));
+            persistSession(response.token, response.user);
 
             const redirectTarget = searchParams.get('redirect');
             const isAdmin =
@@ -117,8 +117,7 @@ export function LoginPage() {
 
     try {
       const response = await loginUser(email, password);
-      localStorage.setItem('agrihub_token', response.token);
-      localStorage.setItem('agrihub_user', JSON.stringify(response.user));
+      persistSession(response.token, response.user);
 
       const redirectTarget = searchParams.get('redirect');
       const isAdmin = response.user.email.toLowerCase() === 'admin@agrihub.com';

@@ -33,11 +33,10 @@ This project is now organized as a MERN workspace with a dedicated React fronten
 npm install
 ```
 
-2. Copy the environment examples:
+2. Copy the root environment example:
 
 ```bash
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
+cp .env.example .env
 ```
 
 3. Start both apps:
@@ -51,3 +50,4 @@ npm run dev
 - The active frontend source lives in `frontend/src`.
 - The project root is now the single workspace entrypoint for dependency installation and scripts.
 - The source tree is kept non-redundant at the root level: `frontend/` for client code and `backend/` for server code.
+- Both frontend and backend now read from the single root `.env`.

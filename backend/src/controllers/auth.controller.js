@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
+import { getUserRoles, getVerificationState } from '../utils/roles.js';
 
 function sanitizeUser(user) {
   return {
@@ -9,6 +10,11 @@ function sanitizeUser(user) {
     name: user.name,
     email: user.email,
     role: user.role,
+    accountType: user.accountType,
+    roles: getUserRoles(user),
+    verification: getVerificationState(user),
+    phone: user.phone,
+    profile: user.profile,
   };
 }
 
@@ -70,6 +76,7 @@ export async function register(req, res, next) {
       phone: String(phone).trim(),
       passwordHash,
       role,
+      roles: role === 'admin' ? ['buyer', 'admin'] : ['buyer'],
     });
 
     return res.status(201).json({
@@ -155,6 +162,7 @@ export async function googleLogin(req, res, next) {
         email: normalizedEmail,
         googleId: payload.sub,
         role,
+        roles: role === 'admin' ? ['buyer', 'admin'] : ['buyer'],
       });
     } else {
       let changed = false;
@@ -166,6 +174,11 @@ export async function googleLogin(req, res, next) {
 
       if (!user.name && payload.name) {
         user.name = payload.name.trim();
+        changed = true;
+      }
+
+      if (!Array.isArray(user.roles) || user.roles.length === 0) {
+        user.roles = role === 'admin' ? ['buyer', 'admin'] : ['buyer'];
         changed = true;
       }
 

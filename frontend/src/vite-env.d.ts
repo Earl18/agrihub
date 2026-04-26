@@ -21,5 +21,19 @@ interface Window {
         prompt: () => void;
       };
     };
+    maps?: {
+      places?: {
+        Autocomplete: new (
+          inputField: HTMLInputElement,
+          options?: {
+            fields?: string[];
+            types?: string[];
+          },
+        ) => {
+          addListener: (eventName: string, handler: () => void) => void;
+          getPlace: () => any;
+        };
+      };
+    };
   };
 }

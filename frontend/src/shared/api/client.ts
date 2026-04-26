@@ -1,9 +1,9 @@
-const defaultBaseUrl = 'http://localhost:5000/api/v1';
+const defaultBaseUrl = 'http://localhost:8000/api/v1';
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.trim() || defaultBaseUrl;
 
-type ApiOptions = RequestInit & {
+type ApiOptions = Omit<RequestInit, 'body'> & {
   body?: unknown;
 };
 
@@ -11,10 +11,14 @@ export async function apiRequest<T>(
   path: string,
   { headers, body, ...init }: ApiOptions = {},
 ): Promise<T> {
+  const token =
+    typeof window !== 'undefined' ? localStorage.getItem('agrihub_token') : null;
+
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -3,6 +3,7 @@ import { Sprout, User, Mail, Phone, Lock, Eye, EyeOff, ArrowRight, CheckCircle2 
 import { useNavigate, Link, useSearchParams } from 'react-router';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { registerUser } from '../../features/auth/api';
+import { persistSession } from '../../shared/auth/session';
 
 export function RegisterPage() {
   const navigate = useNavigate();
@@ -53,8 +54,7 @@ export function RegisterPage() {
         password: form.password,
       });
 
-      localStorage.setItem('agrihub_token', response.token);
-      localStorage.setItem('agrihub_user', JSON.stringify(response.user));
+      persistSession(response.token, response.user);
       navigate(searchParams.get('redirect') || '/app');
     } catch (error) {
       setErrorMessage(

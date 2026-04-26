@@ -4,6 +4,13 @@ type AuthUser = {
   id: string;
   name: string;
   email: string;
+  role?: string;
+  accountType?: string;
+  roles?: string[];
+  verification?: {
+    seller?: 'unverified' | 'pending' | 'verified';
+    laborer?: 'unverified' | 'pending' | 'verified';
+  };
 };
 
 type AuthResponse = {

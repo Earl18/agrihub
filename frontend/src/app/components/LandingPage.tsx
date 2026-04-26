@@ -1,16 +1,63 @@
-import { Sprout, ShieldCheck, Leaf, Truck, Search, CreditCard, Package, ArrowRight, ChevronRight, Users, ShoppingBasket, BarChart3, HardHat } from 'lucide-react';
+import { Sprout, ShieldCheck, Leaf, Truck, Search, CreditCard, Package, ArrowRight, ChevronRight, Users, ShoppingBasket, BarChart3, HardHat, Bell } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { getSessionUser, getUserInitials, isAuthenticated } from '../../shared/auth/session';
+import { Notifications } from './Notifications';
+import {
+  AppNotification,
+  getStoredNotifications,
+  saveNotifications,
+} from '../../shared/notifications/store';
 
 export function LandingPage() {
   const navigate = useNavigate();
+  const sessionUser = getSessionUser();
+  const loggedIn = isAuthenticated();
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+
+  useEffect(() => {
+    setNotifications(getStoredNotifications());
+
+    const handleNotificationsUpdated = () => {
+      setNotifications(getStoredNotifications());
+    };
+
+    window.addEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+
+    return () => {
+      window.removeEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+    };
+  }, []);
+
+  const unreadCount = notifications.filter((notification) => !notification.read).length;
+
+  const handleMarkAsRead = (id: number) => {
+    const nextNotifications = notifications.map((notification) =>
+      notification.id === id ? { ...notification, read: true } : notification,
+    );
+    setNotifications(nextNotifications);
+    saveNotifications(nextNotifications);
+  };
+
+  const handleDeleteNotification = (id: number) => {
+    const nextNotifications = notifications.filter((notification) => notification.id !== id);
+    setNotifications(nextNotifications);
+    saveNotifications(nextNotifications);
+  };
+
+  const handleClearAllNotifications = () => {
+    setNotifications([]);
+    saveNotifications([]);
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 flex flex-col">
       {/* Navbar */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-30 backdrop-blur-lg bg-white/95">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+          <div className="grid grid-cols-[auto_1fr_auto] items-center h-16 gap-6">
             <div className="flex items-center space-x-3">
               <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/30">
                 <Sprout className="w-6 h-6 text-white" />
@@ -21,32 +68,61 @@ export function LandingPage() {
               </div>
             </div>
 
-            <nav className="hidden md:flex items-center space-x-8">
+            <nav className="hidden md:flex items-center justify-center space-x-8">
               <a href="#" className="text-sm text-gray-600 hover:text-green-600 transition-colors">Home</a>
               <a href="#features" className="text-sm text-gray-600 hover:text-green-600 transition-colors">Features</a>
               <a href="#how-it-works" className="text-sm text-gray-600 hover:text-green-600 transition-colors">How It Works</a>
               <a href="#about" className="text-sm text-gray-600 hover:text-green-600 transition-colors">About</a>
             </nav>
 
-            <div className="flex items-center space-x-3">
-              <button
-                onClick={() => navigate('/login')}
-                className="px-4 py-2 text-sm text-green-600 border border-green-200 rounded-xl hover:bg-green-50 transition-all duration-200"
-              >
-                Login
-              </button>
-              <button
-                onClick={() => navigate('/register')}
-                className="px-4 py-2 text-sm text-white bg-gradient-to-r from-green-500 to-green-600 rounded-xl shadow-lg shadow-green-500/30 hover:shadow-xl hover:shadow-green-500/40 transition-all duration-200"
-              >
-                Register
-              </button>
+            <div className="flex items-center justify-end space-x-3">
+              {loggedIn ? (
+                <>
+                  <button
+                    onClick={() => setNotificationsOpen(true)}
+                    className="relative p-2 hover:bg-gray-100 rounded-xl transition-all duration-200"
+                  >
+                    <Bell className="w-5 h-5 text-gray-600" />
+                    {unreadCount > 0 && (
+                      <span className="absolute -top-1 -right-1 w-5 h-5 bg-gradient-to-br from-red-500 to-red-600 rounded-full text-xs flex items-center justify-center text-white font-medium shadow-lg shadow-red-500/30">
+                        {unreadCount}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => navigate('/app?tab=profile')}
+                    className="hidden md:flex items-center hover:bg-gray-100 rounded-xl px-3 py-2 transition-all duration-200"
+                  >
+                    <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center shadow-md shadow-green-500/20">
+                      <span className="text-sm font-semibold text-white">
+                        {getUserInitials(sessionUser?.name)}
+                      </span>
+                    </div>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => navigate('/login')}
+                    className="px-4 py-2 text-sm text-green-600 border border-green-200 rounded-xl hover:bg-green-50 transition-all duration-200"
+                  >
+                    Login
+                  </button>
+                  <button
+                    onClick={() => navigate('/register')}
+                    className="px-4 py-2 text-sm text-white bg-gradient-to-r from-green-500 to-green-600 rounded-xl shadow-lg shadow-green-500/30 hover:shadow-xl hover:shadow-green-500/40 transition-all duration-200"
+                  >
+                    Register
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
       </header>
 
       {/* Hero Section */}
+      <main className="flex-1">
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16 md:py-24">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
@@ -196,7 +272,9 @@ export function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer id="about" className="bg-white/80 backdrop-blur-lg border-t border-gray-100 mt-12">
+      </main>
+
+      <footer id="about" className="bg-white/80 backdrop-blur-lg border-t border-gray-100 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex flex-col md:flex-row justify-between items-center">
             <p className="text-sm text-gray-500">
@@ -210,6 +288,15 @@ export function LandingPage() {
           </div>
         </div>
       </footer>
+
+      <Notifications
+        isOpen={notificationsOpen}
+        onClose={() => setNotificationsOpen(false)}
+        notifications={notifications}
+        onMarkAsRead={handleMarkAsRead}
+        onDelete={handleDeleteNotification}
+        onClearAll={handleClearAllNotifications}
+      />
     </div>
   );
 }

@@ -1,42 +1,51 @@
+import { useEffect, useState } from 'react';
 import { TrendingUp, Users, Truck, DollarSign, AlertCircle } from 'lucide-react';
+import { getDashboardData } from '../../features/app/api';
+
+const icons: Record<string, any> = {
+  DollarSign,
+  Truck,
+  Users,
+  TrendingUp,
+};
 
 export function Dashboard() {
-  const stats = [
-    { label: 'Total Revenue', value: '$45,230', change: '+12.5%', icon: DollarSign, color: 'from-green-500 to-emerald-600' },
-    { label: 'Active Orders', value: '23', change: '+8', icon: Truck, color: 'from-blue-500 to-blue-600' },
-    { label: 'Workers Booked', value: '15', change: '+3', icon: Users, color: 'from-purple-500 to-purple-600' },
-    { label: 'Services Today', value: '7', change: '+2', icon: TrendingUp, color: 'from-orange-500 to-orange-600' },
-  ];
+  const [stats, setStats] = useState<any[]>([]);
+  const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [upcomingTasks, setUpcomingTasks] = useState<any[]>([]);
+  const [roleSections, setRoleSections] = useState<any[]>([]);
 
-  const recentActivities = [
-    { id: 1, type: 'sale', description: 'Sold 500kg Rice to ABC Traders', time: '2 hours ago', status: 'completed' },
-    { id: 2, type: 'labor', description: 'Booked 5 harvesters for wheat field', time: '4 hours ago', status: 'confirmed' },
-    { id: 3, type: 'service', description: 'Tractor service scheduled', time: '5 hours ago', status: 'pending' },
-    { id: 4, type: 'sale', description: 'Purchased fertilizer - 200kg', time: '1 day ago', status: 'completed' },
-  ];
-
-  const upcomingTasks = [
-    { id: 1, task: 'Wheat harvesting', date: '2026-02-09', priority: 'high' },
-    { id: 2, task: 'Irrigation maintenance', date: '2026-02-10', priority: 'medium' },
-    { id: 3, task: 'Fertilizer application', date: '2026-02-12', priority: 'high' },
-    { id: 4, task: 'Equipment inspection', date: '2026-02-15', priority: 'low' },
-  ];
+  useEffect(() => {
+    getDashboardData()
+      .then((payload) => {
+        setStats(payload.stats || []);
+        setRecentActivities(payload.recentActivities || []);
+        setUpcomingTasks(payload.upcomingTasks || []);
+        setRoleSections(payload.roleSections || []);
+      })
+      .catch(() => undefined);
+  }, []);
 
   return (
     <div className="space-y-6">
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className={`grid grid-cols-1 md:grid-cols-2 ${stats.length >= 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-6`}>
         {stats.map((stat, index) => (
           <div key={index} className="group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 p-6 border border-gray-100">
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <p className="text-sm text-gray-500 mb-2">{stat.label}</p>
                 <p className="text-3xl font-bold text-gray-900 mb-1">{stat.value}</p>
-                <p className="text-sm text-green-600 font-medium">{stat.change} from last month</p>
+                <p className="text-sm text-green-600 font-medium">{stat.change}</p>
               </div>
+              {(() => {
+                const Icon = icons[stat.icon] || DollarSign;
+                return (
               <div className={`bg-gradient-to-br ${stat.color} p-3 rounded-xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
-                <stat.icon className="w-6 h-6 text-white" />
+                    <Icon className="w-6 h-6 text-white" />
               </div>
+                );
+              })()}
             </div>
           </div>
         ))}
@@ -103,6 +112,40 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {roleSections.length > 0 && (
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Role Dashboards</h3>
+            <p className="text-sm text-gray-500">Your buyer account is always active, and verified roles are merged here.</p>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            {roleSections.map((section) => (
+              <div key={section.role} className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+                <div className="mb-5">
+                  <h4 className="text-lg font-semibold text-gray-900">{section.title}</h4>
+                  <p className="text-sm text-gray-500 mt-1">{section.description}</p>
+                </div>
+                <div className="grid grid-cols-3 gap-3 mb-5">
+                  {section.stats.map((stat: any) => (
+                    <div key={stat.label} className="rounded-xl bg-gray-50 p-3">
+                      <p className="text-xs uppercase tracking-wide text-gray-500">{stat.label}</p>
+                      <p className="text-lg font-semibold text-gray-900 mt-1">{stat.value}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-2">
+                  {section.highlights.map((highlight: string, index: number) => (
+                    <div key={index} className="rounded-xl border border-gray-100 px-4 py-3 text-sm text-gray-600">
+                      {highlight}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

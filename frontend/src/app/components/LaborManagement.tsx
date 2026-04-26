@@ -1,34 +1,42 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Calendar, Clock, MapPin, User, Plus, CheckCircle, XCircle } from 'lucide-react';
+import { getLaborData } from '../../features/app/api';
+import { SessionUser } from '../../shared/auth/session';
 
 interface LaborManagementProps {
   onBookWorker: (worker: any) => void;
+  currentUser: SessionUser | null;
 }
 
-export function LaborManagement({ onBookWorker }: LaborManagementProps) {
-  const [activeTab, setActiveTab] = useState<'book' | 'active' | 'history'>('book');
+export function LaborManagement({ onBookWorker, currentUser }: LaborManagementProps) {
+  const [activeTab, setActiveTab] = useState<'book' | 'active' | 'history' | 'work'>('book');
+  const [availableWorkers, setAvailableWorkers] = useState<any[]>([]);
+  const [activeBookings, setActiveBookings] = useState<any[]>([]);
+  const [bookingHistory, setBookingHistory] = useState<any[]>([]);
+  const [canOfferLabor, setCanOfferLabor] = useState(false);
+  const [myLaborProfile, setMyLaborProfile] = useState<any>(null);
+  const [myActiveJobs, setMyActiveJobs] = useState<any[]>([]);
+  const [myJobHistory, setMyJobHistory] = useState<any[]>([]);
 
-  const availableWorkers = [
-    { id: 1, name: 'John Martinez', type: 'Harvester', rating: 4.8, experience: '8 years', rate: 25, availability: 'Available', skills: ['Wheat', 'Rice', 'Corn'], distance: '5 km' },
-    { id: 2, name: 'Maria Santos', type: 'Irrigator', rating: 4.9, experience: '10 years', rate: 22, availability: 'Available', skills: ['Drip System', 'Sprinkler', 'Flood'], distance: '3 km' },
-    { id: 3, name: 'Robert Chen', type: 'Planter', rating: 4.7, experience: '6 years', rate: 20, availability: 'Available', skills: ['Seeding', 'Transplanting'], distance: '8 km' },
-    { id: 4, name: 'Ana Rodriguez', type: 'Pesticide Applicator', rating: 4.6, experience: '7 years', rate: 28, availability: 'Busy', skills: ['Spraying', 'Safety'], distance: '4 km' },
-    { id: 5, name: 'David Kim', type: 'General Labor', rating: 4.5, experience: '4 years', rate: 18, availability: 'Available', skills: ['Weeding', 'Loading', 'Sorting'], distance: '6 km' },
-    { id: 6, name: 'Lisa Thompson', type: 'Harvester', rating: 4.9, experience: '12 years', rate: 30, availability: 'Available', skills: ['Wheat', 'Barley', 'Oats'], distance: '7 km' },
-  ];
+  const isLaborer = currentUser?.roles?.includes('laborer') || canOfferLabor;
 
-  const activeBookings = [
-    { id: 1, worker: 'John Martinez', type: 'Harvester', date: '2026-02-08', time: '06:00 AM', duration: '8 hours', location: 'Field A', rate: 25, status: 'confirmed' },
-    { id: 2, worker: 'Maria Santos', type: 'Irrigator', date: '2026-02-09', time: '07:00 AM', duration: '6 hours', location: 'Field B', rate: 22, status: 'confirmed' },
-    { id: 3, worker: 'David Kim', type: 'General Labor', date: '2026-02-10', time: '08:00 AM', duration: '4 hours', location: 'Storage', rate: 18, status: 'pending' },
-  ];
+  useEffect(() => {
+    getLaborData()
+      .then((payload) => {
+        setAvailableWorkers(payload.availableWorkers || []);
+        setActiveBookings(payload.activeBookings || []);
+        setBookingHistory(payload.bookingHistory || []);
+        setCanOfferLabor(Boolean(payload.canOfferLabor));
+        setMyLaborProfile(payload.myLaborProfile || null);
+        setMyActiveJobs(payload.myActiveJobs || []);
+        setMyJobHistory(payload.myJobHistory || []);
+      })
+      .catch(() => undefined);
+  }, []);
 
-  const bookingHistory = [
-    { id: 1, worker: 'Lisa Thompson', type: 'Harvester', date: '2026-02-05', duration: '8 hours', location: 'Field C', cost: 240, status: 'completed', rating: 5 },
-    { id: 2, worker: 'Robert Chen', type: 'Planter', date: '2026-02-03', duration: '6 hours', location: 'Field A', cost: 120, status: 'completed', rating: 4 },
-    { id: 3, worker: 'John Martinez', type: 'Harvester', date: '2026-02-01', duration: '8 hours', location: 'Field B', cost: 200, status: 'completed', rating: 5 },
-    { id: 4, worker: 'Maria Santos', type: 'Irrigator', date: '2026-01-28', duration: '4 hours', location: 'Field A', cost: 88, status: 'cancelled', rating: null },
-  ];
+  const displayWorkers = availableWorkers;
+  const displayActiveBookings = activeBookings;
+  const displayBookingHistory = bookingHistory;
 
   return (
     <div className="space-y-6">
@@ -48,7 +56,7 @@ export function LaborManagement({ onBookWorker }: LaborManagementProps) {
             activeTab === 'active' ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-gray-100'
           }`}
         >
-          Active Bookings ({activeBookings.length})
+          Active Bookings ({displayActiveBookings.length})
         </button>
         <button
           onClick={() => setActiveTab('history')}
@@ -58,6 +66,16 @@ export function LaborManagement({ onBookWorker }: LaborManagementProps) {
         >
           History
         </button>
+        {isLaborer && (
+          <button
+            onClick={() => setActiveTab('work')}
+            className={`flex-1 py-2 px-4 rounded-md transition-colors ${
+              activeTab === 'work' ? 'bg-green-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            My Labor Dashboard
+          </button>
+        )}
       </div>
 
       {activeTab === 'book' && (
@@ -92,7 +110,7 @@ export function LaborManagement({ onBookWorker }: LaborManagementProps) {
 
           {/* Available Workers */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {availableWorkers.map((worker) => (
+            {displayWorkers.map((worker) => (
               <div key={worker.id} className="bg-white rounded-lg shadow hover:shadow-lg transition-shadow p-6">
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-start space-x-4">
@@ -158,7 +176,7 @@ export function LaborManagement({ onBookWorker }: LaborManagementProps) {
           <div className="p-6">
             <h3 className="text-lg font-semibold mb-6">Active Labor Bookings</h3>
             <div className="space-y-4">
-              {activeBookings.map((booking) => (
+              {displayActiveBookings.map((booking) => (
                 <div key={booking.id} className="border border-gray-200 rounded-lg p-4 hover:border-green-500 transition-colors">
                   <div className="flex flex-col md:flex-row md:items-center justify-between">
                     <div className="flex-1">
@@ -215,7 +233,7 @@ export function LaborManagement({ onBookWorker }: LaborManagementProps) {
           <div className="p-6">
             <h3 className="text-lg font-semibold mb-6">Booking History</h3>
             <div className="space-y-4">
-              {bookingHistory.map((booking) => (
+              {displayBookingHistory.map((booking) => (
                 <div key={booking.id} className="border border-gray-200 rounded-lg p-4">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
@@ -269,6 +287,62 @@ export function LaborManagement({ onBookWorker }: LaborManagementProps) {
           </div>
         </div>
       )}
+
+      {activeTab === 'work' && isLaborer && (
+        <div className="space-y-6">
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-semibold mb-4">My Laborer Access</h3>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="rounded-xl bg-gray-50 p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500">Role</p>
+                <p className="mt-1 font-semibold text-gray-900">{myLaborProfile?.workerType || 'Laborer'}</p>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500">Availability</p>
+                <p className="mt-1 font-semibold text-gray-900">{myLaborProfile?.availability || 'Available'}</p>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500">Active Jobs</p>
+                <p className="mt-1 font-semibold text-gray-900">{myActiveJobs.length}</p>
+              </div>
+              <div className="rounded-xl bg-gray-50 p-4">
+                <p className="text-xs uppercase tracking-wide text-gray-500">Completed Jobs</p>
+                <p className="mt-1 font-semibold text-gray-900">{myJobHistory.length}</p>
+              </div>
+            </div>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {(myLaborProfile?.skills || []).map((skill: string, index: number) => (
+                <span key={index} className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded-full">
+                  {skill}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-6">
+            <h3 className="text-lg font-semibold mb-4">My Active Job Assignments</h3>
+            <div className="space-y-4">
+              {myActiveJobs.length === 0 && (
+                <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
+                  Laborer verification is active. Your upcoming job assignments will appear here.
+                </div>
+              )}
+              {myActiveJobs.map((job, index) => (
+                <div key={`${job.worker}-${index}`} className="border border-gray-200 rounded-lg p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-gray-900">{job.worker}</p>
+                      <p className="text-sm text-gray-500">{job.date} at {job.time}</p>
+                    </div>
+                    <span className="text-sm font-medium text-green-600">{job.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ShieldCheck, Upload, X, FileText, Loader2, ImageIcon,
   Leaf, HardHat, ShoppingBag, Camera, Award, Clock, ChevronDown, ChevronUp,
   CheckCircle2, AlertCircle, Lock, RefreshCw
 } from 'lucide-react';
+import { applyForRole } from '../../features/app/api';
+import { SessionUser } from '../../shared/auth/session';
 
 type VerificationStatus = 'unverified' | 'pending' | 'verified';
 
@@ -14,10 +16,15 @@ interface UploadedFile {
 
 const SKILLS = ['Harvesting', 'Irrigation', 'Planting', 'Weeding', 'Spraying', 'Land Preparation'];
 
-export function RolesVerification() {
-  // Role states
+interface RolesVerificationProps {
+  user: SessionUser | null;
+  onUserUpdated: (user: SessionUser) => void;
+}
+
+export function RolesVerification({ user, onUserUpdated }: RolesVerificationProps) {
   const [sellerStatus, setSellerStatus] = useState<VerificationStatus>('unverified');
   const [laborerStatus, setLaborerStatus] = useState<VerificationStatus>('unverified');
+  const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Expanded panels
   const [sellerExpanded, setSellerExpanded] = useState(false);
@@ -36,6 +43,11 @@ export function RolesVerification() {
   const [laborerConsent, setLaborerConsent] = useState(false);
   const [laborerSubmitting, setLaborerSubmitting] = useState(false);
 
+  useEffect(() => {
+    setSellerStatus(user?.verification?.seller || 'unverified');
+    setLaborerStatus(user?.verification?.laborer || 'unverified');
+  }, [user]);
+
   const activeRoles: { label: string; icon: React.ReactNode; color: string }[] = [
     { label: 'Buyer', icon: <ShoppingBag className="w-3.5 h-3.5" />, color: 'bg-blue-100 text-blue-700' },
   ];
@@ -46,22 +58,65 @@ export function RolesVerification() {
     activeRoles.push({ label: 'Verified Laborer', icon: <HardHat className="w-3.5 h-3.5" />, color: 'bg-orange-100 text-orange-700' });
   }
 
-  const handleSellerSubmit = () => {
+  const handleSellerSubmit = async () => {
     setSellerSubmitting(true);
-    setTimeout(() => {
+    setFeedback(null);
+
+    try {
+      const { user: updatedUser, message } = await applyForRole({
+        role: 'seller',
+        application: {
+          documents: {
+            validId: sellerUploads['seller-valid-id']?.name,
+            selfieWithId: sellerUploads['seller-selfie-id']?.name,
+            barangayCertificate: sellerUploads['seller-barangay']?.name,
+            farmPhotos: sellerUploads['seller-farm-photos']?.name,
+            rsbsa: sellerUploads['seller-rsbsa']?.name,
+          },
+        },
+      });
+
+      onUserUpdated(updatedUser);
+      setFeedback({ type: 'success', message });
       setSellerSubmitting(false);
-      setSellerStatus('pending');
+      setSellerStatus(updatedUser.verification?.seller || 'verified');
       setSellerExpanded(false);
-    }, 1500);
+    } catch (error: any) {
+      setSellerSubmitting(false);
+      setFeedback({ type: 'error', message: error.message || 'Seller verification failed.' });
+    }
   };
 
-  const handleLaborerSubmit = () => {
+  const handleLaborerSubmit = async () => {
     setLaborerSubmitting(true);
-    setTimeout(() => {
+    setFeedback(null);
+
+    try {
+      const { user: updatedUser, message } = await applyForRole({
+        role: 'laborer',
+        application: {
+          documents: {
+            validId: laborerUploads['laborer-valid-id']?.name,
+            selfie: laborerUploads['laborer-selfie']?.name,
+            tesda: laborerUploads['laborer-tesda']?.name,
+            coe: laborerUploads['laborer-coe']?.name,
+            training: laborerUploads['laborer-training']?.name,
+          },
+          skills: laborerSkills,
+          experience: laborerExperience,
+          description: laborerDescription,
+        },
+      });
+
+      onUserUpdated(updatedUser);
+      setFeedback({ type: 'success', message });
       setLaborerSubmitting(false);
-      setLaborerStatus('pending');
+      setLaborerStatus(updatedUser.verification?.laborer || 'verified');
       setLaborerExpanded(false);
-    }, 1500);
+    } catch (error: any) {
+      setLaborerSubmitting(false);
+      setFeedback({ type: 'error', message: error.message || 'Laborer verification failed.' });
+    }
   };
 
   const sellerCanSubmit = sellerConsent && sellerUploads['seller-valid-id'] && sellerUploads['seller-selfie-id'] &&
@@ -83,6 +138,16 @@ export function RolesVerification() {
       <p className="text-sm text-gray-500 mb-5 ml-[52px]">
         You can have multiple roles on this platform. Each role requires separate verification.
       </p>
+
+      {feedback && (
+        <div className={`mb-5 rounded-xl border px-4 py-3 text-sm ${
+          feedback.type === 'success'
+            ? 'border-green-200 bg-green-50 text-green-700'
+            : 'border-red-200 bg-red-50 text-red-700'
+        }`}>
+          {feedback.message}
+        </div>
+      )}
 
       {/* Current Roles */}
       <div className="mb-6">

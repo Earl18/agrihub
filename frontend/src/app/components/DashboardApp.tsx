@@ -5,24 +5,19 @@ import { Dashboard } from './Dashboard';
 import { Marketplace } from './Marketplace';
 import { LaborManagement } from './LaborManagement';
 import { ServicesBooking } from './ServicesBooking';
-import { Operations } from './Operations';
 import { Profile } from './Profile';
 import { Notifications } from './Notifications';
 import { Cart, CartItem } from './Cart';
 import { Receipt, ReceiptData } from './Receipt';
 import { BookingModal } from './BookingModal';
 import { getSessionUser, getUserInitials, isAuthenticated } from '../../shared/auth/session';
+import {
+  AppNotification,
+  getStoredNotifications,
+  saveNotifications,
+} from '../../shared/notifications/store';
 
-type TabType = 'dashboard' | 'marketplace' | 'labor' | 'services' | 'operations' | 'profile';
-
-interface Notification {
-  id: number;
-  type: 'success' | 'warning' | 'info';
-  title: string;
-  message: string;
-  time: string;
-  read: boolean;
-}
+type TabType = 'dashboard' | 'marketplace' | 'labor' | 'services' | 'profile';
 
 export function DashboardApp() {
   const navigate = useNavigate();
@@ -31,12 +26,7 @@ export function DashboardApp() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([
-    { id: 1, type: 'success', title: 'Order Confirmed', message: 'Your order of 500kg Rice has been confirmed', time: '5 minutes ago', read: false },
-    { id: 2, type: 'info', title: 'Worker Available', message: 'John Martinez is now available for booking', time: '1 hour ago', read: false },
-    { id: 3, type: 'warning', title: 'Service Reminder', message: 'Tractor service scheduled for tomorrow at 8 AM', time: '2 hours ago', read: true },
-    { id: 4, type: 'success', title: 'Payment Received', message: 'Payment of $240 received for wheat harvest', time: '5 hours ago', read: true },
-  ]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const [cartOpen, setCartOpen] = useState(false);
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
@@ -53,7 +43,6 @@ export function DashboardApp() {
     { id: 'marketplace' as TabType, name: 'Marketplace', icon: ShoppingBag },
     { id: 'labor' as TabType, name: 'Labor', icon: Users },
     { id: 'services' as TabType, name: 'Services', icon: Truck },
-    { id: 'operations' as TabType, name: 'Operations', icon: Sprout },
   ];
 
   useEffect(() => {
@@ -61,11 +50,25 @@ export function DashboardApp() {
 
     if (
       requestedTab &&
-      ['dashboard', 'marketplace', 'labor', 'services', 'operations', 'profile'].includes(requestedTab)
+      ['dashboard', 'marketplace', 'labor', 'services', 'profile'].includes(requestedTab)
     ) {
       setActiveTab(requestedTab);
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    setNotifications(getStoredNotifications());
+
+    const handleNotificationsUpdated = () => {
+      setNotifications(getStoredNotifications());
+    };
+
+    window.addEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+
+    return () => {
+      window.removeEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+    };
+  }, []);
 
   const updateActiveTab = (tab: TabType) => {
     setActiveTab(tab);
@@ -82,25 +85,34 @@ export function DashboardApp() {
   };
 
   const handleMarkAsRead = (id: number) => {
-    setNotifications(notifications.map(n => n.id === id ? { ...n, read: true } : n));
+    const nextNotifications = notifications.map((notification) =>
+      notification.id === id ? { ...notification, read: true } : notification,
+    );
+    setNotifications(nextNotifications);
+    saveNotifications(nextNotifications);
   };
 
   const handleDeleteNotification = (id: number) => {
-    setNotifications(notifications.filter(n => n.id !== id));
+    const nextNotifications = notifications.filter((notification) => notification.id !== id);
+    setNotifications(nextNotifications);
+    saveNotifications(nextNotifications);
   };
 
   const handleClearAllNotifications = () => {
     setNotifications([]);
+    saveNotifications([]);
   };
 
-  const addNotification = (notification: Omit<Notification, 'id' | 'read' | 'time'>) => {
-    const newNotification: Notification = {
+  const addNotification = (notification: Omit<AppNotification, 'id' | 'read' | 'time'>) => {
+    const newNotification: AppNotification = {
       ...notification,
       id: Date.now(),
       read: false,
       time: 'Just now',
     };
-    setNotifications([newNotification, ...notifications]);
+    const nextNotifications = [newNotification, ...notifications];
+    setNotifications(nextNotifications);
+    saveNotifications(nextNotifications);
   };
 
   const handleAddToCart = (product: any) => {
@@ -201,10 +213,9 @@ export function DashboardApp() {
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard': return <Dashboard />;
-      case 'marketplace': return <Marketplace onAddToCart={handleAddToCart} />;
-      case 'labor': return <LaborManagement onBookWorker={handleBookWorker} />;
+      case 'marketplace': return <Marketplace onAddToCart={handleAddToCart} currentUser={sessionUser} />;
+      case 'labor': return <LaborManagement onBookWorker={handleBookWorker} currentUser={sessionUser} />;
       case 'services': return <ServicesBooking onBookService={handleBookService} />;
-      case 'operations': return <Operations />;
       case 'profile': return <Profile />;
       default: return <Dashboard />;
     }
@@ -213,7 +224,7 @@ export function DashboardApp() {
   const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 flex flex-col">
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-30 backdrop-blur-lg bg-white/95">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
@@ -333,11 +344,11 @@ export function DashboardApp() {
         )}
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {renderContent()}
       </main>
 
-      <footer className="bg-white/80 backdrop-blur-lg border-t border-gray-100 mt-12">
+      <footer className="bg-white/80 backdrop-blur-lg border-t border-gray-100 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex flex-col md:flex-row justify-between items-center">
             <p className="text-sm text-gray-500">&copy; 2026 AgriHub. Empowering farmers with technology.</p>

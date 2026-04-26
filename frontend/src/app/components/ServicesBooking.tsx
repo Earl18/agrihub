@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Truck, Wrench, Droplet, Scissors, Calendar, Clock, MapPin, ArrowLeft, Eye, XCircle, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
+import { getServicesData } from '../../features/app/api';
 
 interface ServicesBookingProps {
   onBookService: (service: any) => void;
@@ -24,37 +25,8 @@ export function ServicesBooking({ onBookService }: ServicesBookingProps) {
   const [selectedService, setSelectedService] = useState<string | null>(null);
   const [viewingBooking, setViewingBooking] = useState<Booking | null>(null);
   const [cancelConfirmId, setCancelConfirmId] = useState<number | null>(null);
-
-  const [bookings, setBookings] = useState<Booking[]>([
-    {
-      id: 1,
-      service: 'Tractor (70 HP)',
-      provider: 'AgriEquip Rentals',
-      date: '2026-02-09',
-      time: '08:00 AM',
-      duration: '6 hours',
-      location: 'Field A, Brgy. San Isidro',
-      status: 'confirmed',
-      description: 'Heavy-duty tractor rental for plowing and land preparation. Includes operator.',
-      rate: '$45/hour',
-      contact: '+63 917 123 4567',
-      bookingRef: 'BK-2026-0091',
-    },
-    {
-      id: 2,
-      service: 'Sprinkler Maintenance',
-      provider: 'IrrigationPro',
-      date: '2026-02-11',
-      time: '10:00 AM',
-      duration: '3 hours',
-      location: 'Field B, Brgy. Masagana',
-      status: 'pending',
-      description: 'Routine maintenance and inspection of sprinkler irrigation system. Parts included.',
-      rate: '$75/service',
-      contact: '+63 918 765 4321',
-      bookingRef: 'BK-2026-0102',
-    },
-  ]);
+  const [liveProviders, setLiveProviders] = useState<any[]>([]);
+  const [liveBookings, setLiveBookings] = useState<Booking[]>([]);
 
   const serviceCategories = [
     { id: 'equipment', name: 'Equipment Rental', icon: Truck, color: 'bg-blue-500' },
@@ -63,43 +35,26 @@ export function ServicesBooking({ onBookService }: ServicesBookingProps) {
     { id: 'harvesting', name: 'Harvesting Services', icon: Scissors, color: 'bg-green-500' },
   ];
 
-  const services = {
-    equipment: [
-      { id: 1, name: 'Tractor (70 HP)', provider: 'AgriEquip Rentals', rate: 45, unit: 'hour', available: true, image: '🚜' },
-      { id: 2, name: 'Combine Harvester', provider: 'Farm Machinery Co.', rate: 120, unit: 'hour', available: true, image: '🌾' },
-      { id: 3, name: 'Sprayer System', provider: 'AgriEquip Rentals', rate: 35, unit: 'hour', available: false, image: '💧' },
-      { id: 4, name: 'Seed Drill', provider: 'Green Tech', rate: 40, unit: 'hour', available: true, image: '🌱' },
-    ],
-    maintenance: [
-      { id: 5, name: 'Tractor Servicing', provider: 'Farm Mechanics Ltd.', rate: 150, unit: 'service', available: true, image: '🔧' },
-      { id: 6, name: 'Equipment Inspection', provider: 'SafeFarm Services', rate: 80, unit: 'service', available: true, image: '🔍' },
-      { id: 7, name: 'Pump Repair', provider: 'Hydro Solutions', rate: 100, unit: 'service', available: true, image: '⚙️' },
-      { id: 8, name: 'Blade Sharpening', provider: 'Sharp Edge Co.', rate: 50, unit: 'service', available: true, image: '✂️' },
-    ],
-    irrigation: [
-      { id: 9, name: 'Drip System Installation', provider: 'WaterWise Farms', rate: 500, unit: 'acre', available: true, image: '💧' },
-      { id: 10, name: 'Sprinkler Maintenance', provider: 'IrrigationPro', rate: 75, unit: 'service', available: true, image: '🌊' },
-      { id: 11, name: 'Well Drilling', provider: 'DeepWater Solutions', rate: 2000, unit: 'service', available: false, image: '🕳️' },
-      { id: 12, name: 'Pump Installation', provider: 'Hydro Solutions', rate: 400, unit: 'service', available: true, image: '⚡' },
-    ],
-    harvesting: [
-      { id: 13, name: 'Wheat Harvesting', provider: 'Harvest Masters', rate: 200, unit: 'acre', available: true, image: '🌾' },
-      { id: 14, name: 'Fruit Picking Team', provider: 'Orchard Services', rate: 300, unit: 'day', available: true, image: '🍎' },
-      { id: 15, name: 'Grain Transport', provider: 'Farm Logistics', rate: 150, unit: 'load', available: true, image: '🚛' },
-      { id: 16, name: 'Post-Harvest Processing', provider: 'AgriProcess Co.', rate: 250, unit: 'service', available: true, image: '📦' },
-    ],
-  };
+  useEffect(() => {
+    getServicesData()
+      .then((payload) => {
+        setLiveProviders(payload.providers || []);
+        setLiveBookings(payload.bookings || []);
+      })
+      .catch(() => undefined);
+  }, []);
 
   const handleCancelBooking = (id: number) => {
-    setBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'cancelled' as const } : b));
+        setLiveBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'cancelled' as const } : b));
     setCancelConfirmId(null);
   };
 
-  const currentServices = selectedService ? services[selectedService as keyof typeof services] : [];
+  const currentServices = selectedService ? liveProviders.filter((provider: any) => provider.categoryId === selectedService).flatMap((provider: any) => provider.services) : [];
+  const displayBookings = liveBookings;
 
   // ==================== BOOKING DETAILS VIEW ====================
   if (viewingBooking) {
-    const booking = bookings.find(b => b.id === viewingBooking.id) || viewingBooking;
+    const booking = displayBookings.find(b => b.id === viewingBooking.id) || viewingBooking;
     return (
       <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
         {/* Back button */}
@@ -244,7 +199,7 @@ export function ServicesBooking({ onBookService }: ServicesBookingProps) {
       <div className="bg-white rounded-lg shadow p-6">
         <h3 className="text-lg font-semibold mb-4">Upcoming Service Bookings</h3>
         <div className="space-y-4">
-          {bookings.map((booking) => (
+          {displayBookings.map((booking) => (
             <div
               key={booking.id}
               className={`border rounded-lg p-4 transition-all duration-200 ${
@@ -406,3 +361,4 @@ function StatusBadgeLarge({ status }: { status: string }) {
     </span>
   );
 }
+
