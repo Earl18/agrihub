@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { User, Mail, Phone, MapPin, Edit2, Save, Camera, Building, LogOut } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { RolesVerification } from './RolesVerification';
-import { getCurrentUserProfile, updateCurrentUserProfile } from '../../features/app/api';
-import { clearSession, getSessionUser, persistSessionUser, SessionUser } from '../../shared/auth/session';
+import { createProfileAvatarUploadUrl, getCurrentUserProfile, updateCurrentUserProfile } from '../../features/app/api';
+import { clearSession, getSessionUser, getUserInitials, persistSessionUser, SessionUser } from '../../shared/auth/session';
+import { requireSupabaseClient } from '../../shared/supabase/client';
+import { SmoothedAvatarImage } from './ui/smoothed-avatar-image';
 
 interface ProfileData {
   firstName: string;
@@ -24,7 +26,12 @@ interface ProfileData {
   farmSize: string;
   experience: string;
   specialization: string;
+  avatarUrl: string;
 }
+
+const AVATAR_OUTPUT_SIZE = 512;
+const AVATAR_OUTPUT_TYPE = 'image/jpeg';
+const AVATAR_OUTPUT_QUALITY = 0.92;
 
 const EMPTY_PROFILE: ProfileData = {
   firstName: '',
@@ -45,6 +52,7 @@ const EMPTY_PROFILE: ProfileData = {
   farmSize: '',
   experience: '',
   specialization: '',
+  avatarUrl: '',
 };
 
 function splitName(fullName?: string) {
@@ -76,6 +84,10 @@ function combineName(profile: Pick<ProfileData, 'firstName' | 'middleName' | 'la
     .map((value) => value.trim())
     .filter(Boolean)
     .join(' ');
+}
+
+function getProfileInitials(profile: Pick<ProfileData, 'firstName' | 'middleName' | 'lastName'>) {
+  return getUserInitials(combineName(profile));
 }
 
 function mapUserToProfile(user?: Partial<SessionUser> & { phone?: string; profile?: any } | null): ProfileData {
@@ -116,11 +128,95 @@ function mapUserToProfile(user?: Partial<SessionUser> & { phone?: string; profil
     farmSize: user?.profile?.farmSize || '',
     experience: user?.profile?.experience || '',
     specialization: user?.profile?.specialization || '',
+    avatarUrl: user?.profile?.avatarUrl || '',
   };
 }
 
 function getDisplayValue(value: string, fallback = 'Not set') {
   return value?.trim() ? value : fallback;
+}
+
+function buildAvatarFileName(fileName: string) {
+  const dotIndex = fileName.lastIndexOf('.');
+  const baseName = dotIndex > 0 ? fileName.slice(0, dotIndex) : fileName;
+
+  return `${baseName}-smoothed.jpg`;
+}
+
+function loadImageFromFile(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to process the selected image.'));
+    };
+
+    image.src = objectUrl;
+  });
+}
+
+async function smoothAvatarImage(file: File) {
+  const image = await loadImageFromFile(file);
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+
+  if (!context) {
+    throw new Error('Image processing is not available in this browser.');
+  }
+
+  canvas.width = AVATAR_OUTPUT_SIZE;
+  canvas.height = AVATAR_OUTPUT_SIZE;
+
+  const sourceSize = Math.min(image.width, image.height);
+  const sourceX = (image.width - sourceSize) / 2;
+  const sourceY = (image.height - sourceSize) / 2;
+
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(
+    image,
+    sourceX,
+    sourceY,
+    sourceSize,
+    sourceSize,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((nextBlob) => {
+      if (nextBlob) {
+        resolve(nextBlob);
+        return;
+      }
+
+      reject(new Error('Unable to smooth the selected image.'));
+    }, AVATAR_OUTPUT_TYPE, AVATAR_OUTPUT_QUALITY);
+  });
+
+  const processedFile = new File([blob], buildAvatarFileName(file.name), {
+    type: AVATAR_OUTPUT_TYPE,
+    lastModified: Date.now(),
+  });
+
+  return {
+    previewUrl: URL.createObjectURL(blob),
+    uploadFile: processedFile,
+  };
+}
+
+function profilesMatch(left: ProfileData, right: ProfileData) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function getVerificationStatus(user: SessionUser | null, role: 'seller' | 'laborer') {
@@ -219,6 +315,7 @@ export function Profile() {
   const navigate = useNavigate();
   const sessionUser = getSessionUser();
   const addressInputRef = useRef<HTMLInputElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const autocompleteRef = useRef<any>(null);
   const [mapsReady, setMapsReady] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -226,25 +323,28 @@ export function Profile() {
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [sessionMeta, setSessionMeta] = useState<SessionUser | null>(sessionUser);
   const [profileData, setProfileData] = useState<ProfileData>(mapUserToProfile(sessionUser) || EMPTY_PROFILE);
-
   const [editedData, setEditedData] = useState<ProfileData>(profileData);
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const previewObjectUrlRef = useRef<string | null>(null);
 
   const loadProfile = () => {
     getCurrentUserProfile()
       .then(({ user }) => {
-        const nextProfile = mapUserToProfile(user);
-        setProfileData(nextProfile);
-        setEditedData(nextProfile);
-        setSessionMeta(user);
-        persistSessionUser({
+      const nextProfile = mapUserToProfile(user);
+      setProfileData(nextProfile);
+      setEditedData(nextProfile);
+      setSessionMeta(user);
+      persistSessionUser({
           id: user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
-          accountType: user.accountType,
-          roles: user.roles,
-          verification: user.verification,
-        });
+        role: user.role,
+        accountType: user.accountType,
+        roles: user.roles,
+        phone: user.phone,
+        profile: user.profile,
+        verification: user.verification,
+      });
       })
       .catch(() => undefined);
   };
@@ -257,11 +357,22 @@ export function Profile() {
     loadProfile();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current);
+      }
+    };
+  }, []);
+
   const sellerVerified = getVerificationStatus(sessionMeta, 'seller') === 'verified';
   const laborerVerified = getVerificationStatus(sessionMeta, 'laborer') === 'verified';
   const showFarmFields = sellerVerified;
   const showLaborFields = laborerVerified;
   const mapsApiKey = getMapsApiKey();
+  const hasUnsavedChanges = !profilesMatch(editedData, profileData) || pendingAvatarFile !== null;
+  const displayAvatarUrl = isEditing ? editedData.avatarUrl : profileData.avatarUrl;
+  const displayInitials = getProfileInitials(isEditing ? editedData : profileData);
 
   useEffect(() => {
     if (!mapsApiKey) {
@@ -332,6 +443,24 @@ export function Profile() {
     setSaveMessage(null);
 
     try {
+      let avatarPath: string | undefined;
+
+      if (pendingAvatarFile) {
+        const supabase = requireSupabaseClient();
+        const uploadTarget = await createProfileAvatarUploadUrl({
+          fileName: pendingAvatarFile.name,
+        });
+        const { error } = await supabase.storage
+          .from(uploadTarget.bucket)
+          .uploadToSignedUrl(uploadTarget.path, uploadTarget.token, pendingAvatarFile);
+
+        if (error) {
+          throw new Error(error.message || 'Unable to upload the profile picture.');
+        }
+
+        avatarPath = uploadTarget.path;
+      }
+
       const { user } = await updateCurrentUserProfile({
         name: combineName(editedData),
         email: editedData.email,
@@ -367,6 +496,8 @@ export function Profile() {
                 specialization: editedData.specialization,
               }
             : {}),
+          ...(avatarPath ? { avatarPath } : {}),
+          ...(!avatarPath ? { avatarUrl: editedData.avatarUrl } : {}),
         },
       });
 
@@ -380,12 +511,15 @@ export function Profile() {
         role: user.role,
         accountType: user.accountType,
         roles: user.roles,
+        phone: user.phone,
+        profile: user.profile,
         verification: user.verification,
       };
       persistSessionUser(nextSessionUser);
       setSessionMeta(nextSessionUser);
       setSaveMessage({ type: 'success', text: 'Profile updated successfully.' });
       setIsEditing(false);
+      setPendingAvatarFile(null);
       loadProfile();
     } catch (error: any) {
       setSaveMessage({
@@ -401,11 +535,57 @@ export function Profile() {
     setEditedData(profileData);
     setSaveMessage(null);
     setIsEditing(false);
+    setPendingAvatarFile(null);
   };
 
   const handleLogout = () => {
     clearSession();
     navigate('/');
+  };
+
+  const handleProfilePhotoClick = () => {
+    if (!isEditing) {
+      return;
+    }
+
+    photoInputRef.current?.click();
+  };
+
+  const handleProfilePhotoChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setSaveMessage({ type: 'error', text: 'Please choose an image file for your profile photo.' });
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      const processedAvatar = await smoothAvatarImage(file);
+
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current);
+      }
+
+      previewObjectUrlRef.current = processedAvatar.previewUrl;
+      setEditedData((current) => ({
+        ...current,
+        avatarUrl: processedAvatar.previewUrl,
+      }));
+      setPendingAvatarFile(processedAvatar.uploadFile);
+      setSaveMessage(null);
+    } catch (error: any) {
+      setSaveMessage({
+        type: 'error',
+        text: error?.message || 'Unable to process your profile photo right now.',
+      });
+    }
+
+    event.target.value = '';
   };
 
   return (
@@ -426,12 +606,38 @@ export function Profile() {
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
           <div className="flex items-center space-x-6">
             <div className="relative">
-              <div className="w-24 h-24 bg-gradient-to-br from-green-400 to-green-600 rounded-full flex items-center justify-center">
-                <User className="w-12 h-12 text-white" />
+              <div className="w-28 h-28 overflow-hidden rounded-full flex items-center justify-center ring-1 ring-gray-200 shadow-sm">
+                {displayAvatarUrl ? (
+                  <SmoothedAvatarImage
+                    src={displayAvatarUrl}
+                    alt="Profile"
+                    className="block h-full w-full object-cover object-center"
+                    loading="eager"
+                    decoding="async"
+                  />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-green-500 to-green-600 text-white">
+                    <span className="text-3xl font-semibold">{displayInitials}</span>
+                  </div>
+                )}
               </div>
-              <button className="absolute bottom-0 right-0 bg-green-600 text-white p-2 rounded-full hover:bg-green-700">
-                <Camera className="w-4 h-4" />
-              </button>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleProfilePhotoChange}
+              />
+              {isEditing ? (
+                <button
+                  type="button"
+                  onClick={handleProfilePhotoClick}
+                  className="absolute bottom-0 right-0 rounded-full bg-green-600 p-2 text-white hover:bg-green-700 cursor-pointer"
+                  title="Upload profile picture"
+                >
+                  <Camera className="w-4 h-4" />
+                </button>
+              ) : null}
             </div>
             <div>
               <h2 className="text-2xl font-bold">{getDisplayValue(combineName(profileData), 'Buyer Account')}</h2>
@@ -454,7 +660,7 @@ export function Profile() {
             </button>
             <button
               onClick={() => isEditing ? handleSave() : setIsEditing(true)}
-              disabled={isSaving}
+              disabled={isEditing ? isSaving || !hasUnsavedChanges : isSaving}
               className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed flex items-center space-x-2"
             >
               {isEditing ? (
@@ -757,7 +963,7 @@ export function Profile() {
             </button>
             <button
               onClick={handleSave}
-              disabled={isSaving}
+              disabled={isSaving || !hasUnsavedChanges}
               className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {isSaving ? 'Saving...' : 'Save Changes'}

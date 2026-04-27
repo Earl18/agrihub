@@ -4,6 +4,7 @@ type AuthUser = {
   id: string;
   name: string;
   email: string;
+  emailVerified?: boolean;
   role?: string;
   accountType?: string;
   roles?: string[];
@@ -19,6 +20,11 @@ type AuthResponse = {
   user: AuthUser;
 };
 
+type RegisterResponse = {
+  message: string;
+  email: string;
+};
+
 export function loginUser(email: string, password: string) {
   return apiRequest<AuthResponse>('/auth/login', {
     method: 'POST',
@@ -31,10 +37,29 @@ export function registerUser(payload: {
   email: string;
   phone: string;
   password: string;
+  profile?: {
+    firstName?: string;
+    middleName?: string;
+    lastName?: string;
+  };
 }) {
-  return apiRequest<AuthResponse>('/auth/register', {
+  return apiRequest<RegisterResponse>('/auth/register', {
     method: 'POST',
     body: payload,
+  });
+}
+
+export function verifyRegistrationCode(email: string, code: string) {
+  return apiRequest<AuthResponse>('/auth/register/verify', {
+    method: 'POST',
+    body: { email, code },
+  });
+}
+
+export function resendRegistrationCode(email: string) {
+  return apiRequest<{ message: string }>('/auth/register/resend', {
+    method: 'POST',
+    body: { email },
   });
 }
 
@@ -50,4 +75,25 @@ export function getGoogleAuthConfig() {
     enabled: boolean;
     clientId: string;
   }>('/auth/google/config');
+}
+
+export function requestPasswordReset(email: string) {
+  return apiRequest<{ message: string }>('/auth/forgot-password/request', {
+    method: 'POST',
+    body: { email },
+  });
+}
+
+export function verifyPasswordResetCode(email: string, code: string) {
+  return apiRequest<{ message: string }>('/auth/forgot-password/verify', {
+    method: 'POST',
+    body: { email, code },
+  });
+}
+
+export function resetPassword(email: string, code: string, password: string) {
+  return apiRequest<{ message: string }>('/auth/forgot-password/reset', {
+    method: 'POST',
+    body: { email, code, password },
+  });
 }

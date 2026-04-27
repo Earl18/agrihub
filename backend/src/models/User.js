@@ -117,6 +117,146 @@ const roleVerificationSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    documents: {
+      type: [
+        new mongoose.Schema(
+          {
+            type: {
+              type: String,
+              required: true,
+            },
+            bucket: {
+              type: String,
+              required: true,
+            },
+            path: {
+              type: String,
+              required: true,
+            },
+            originalName: {
+              type: String,
+              required: true,
+            },
+            uploadedAt: {
+              type: Date,
+              default: Date.now,
+            },
+          },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
+    details: {
+      idType: {
+        type: String,
+        default: '',
+      },
+      idNumber: {
+        type: String,
+        default: '',
+      },
+      farmProofType: {
+        type: String,
+        default: '',
+      },
+      addressConfirmed: {
+        type: Boolean,
+        default: false,
+      },
+      selfieConfirmed: {
+        type: Boolean,
+        default: false,
+      },
+      riskAccepted: {
+        type: Boolean,
+        default: false,
+      },
+      consentAccepted: {
+        type: Boolean,
+        default: false,
+      },
+      experience: {
+        type: String,
+        default: '',
+      },
+      description: {
+        type: String,
+        default: '',
+      },
+      laborProofType: {
+        type: String,
+        default: '',
+      },
+      skills: {
+        type: [String],
+        default: [],
+      },
+    },
+  },
+  { _id: false },
+);
+
+const activityLogSchema = new mongoose.Schema(
+  {
+    description: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    status: {
+      type: String,
+      enum: ['completed', 'confirmed', 'pending'],
+      default: 'confirmed',
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: false },
+);
+
+const passwordResetSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      default: '',
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    verifiedAt: {
+      type: Date,
+      default: null,
+    },
+    requestedAt: {
+      type: Date,
+      default: null,
+    },
+  },
+  { _id: false },
+);
+
+const emailVerificationSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      default: '',
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    requestedAt: {
+      type: Date,
+      default: null,
+    },
+    verifiedAt: {
+      type: Date,
+      default: null,
+    },
   },
   { _id: false },
 );
@@ -148,6 +288,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: undefined,
     },
+    emailVerified: {
+      type: Boolean,
+      default: false,
+    },
     role: {
       type: String,
       enum: ['user', 'admin'],
@@ -172,6 +316,18 @@ const userSchema = new mongoose.Schema(
         type: roleVerificationSchema,
         default: () => ({}),
       },
+    },
+    activityLog: {
+      type: [activityLogSchema],
+      default: [],
+    },
+    passwordReset: {
+      type: passwordResetSchema,
+      default: () => ({}),
+    },
+    emailVerification: {
+      type: emailVerificationSchema,
+      default: () => ({}),
     },
     profile: {
       firstName: {
@@ -237,6 +393,14 @@ const userSchema = new mongoose.Schema(
         default: '',
       },
       specialization: {
+        type: String,
+        default: '',
+      },
+      avatarPath: {
+        type: String,
+        default: '',
+      },
+      avatarUrl: {
         type: String,
         default: '',
       },

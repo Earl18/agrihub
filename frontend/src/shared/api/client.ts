@@ -27,10 +27,14 @@ export async function apiRequest<T>(
   const payload = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    const message =
+    const rawMessage =
       typeof payload?.message === 'string'
         ? payload.message
         : 'Something went wrong while contacting the server.';
+    const message =
+      rawMessage.startsWith('Route not found:')
+        ? 'This feature is not available right now. Please try again in a moment.'
+        : rawMessage;
     throw new Error(message);
   }
 

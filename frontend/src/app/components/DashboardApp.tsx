@@ -10,12 +10,19 @@ import { Notifications } from './Notifications';
 import { Cart, CartItem } from './Cart';
 import { Receipt, ReceiptData } from './Receipt';
 import { BookingModal } from './BookingModal';
-import { getSessionUser, getUserInitials, isAuthenticated } from '../../shared/auth/session';
+import { SmoothedAvatarImage } from './ui/smoothed-avatar-image';
+import {
+  getSessionUpdatedEventName,
+  getSessionUser,
+  getUserInitials,
+  isAuthenticated,
+} from '../../shared/auth/session';
 import {
   AppNotification,
   getStoredNotifications,
   saveNotifications,
 } from '../../shared/notifications/store';
+import { addStoredActivity } from '../../shared/activity/store';
 
 type TabType = 'dashboard' | 'marketplace' | 'labor' | 'services' | 'profile';
 
@@ -35,7 +42,7 @@ export function DashboardApp() {
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
   const [bookingType, setBookingType] = useState<'labor' | 'service'>('labor');
   const [bookingItem, setBookingItem] = useState<any>(null);
-  const sessionUser = getSessionUser();
+  const [sessionUser, setSessionUser] = useState(getSessionUser());
   const loggedIn = isAuthenticated();
 
   const tabs = [
@@ -67,6 +74,18 @@ export function DashboardApp() {
 
     return () => {
       window.removeEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncSession = () => {
+      setSessionUser(getSessionUser());
+    };
+
+    window.addEventListener(getSessionUpdatedEventName(), syncSession);
+
+    return () => {
+      window.removeEventListener(getSessionUpdatedEventName(), syncSession);
     };
   }, []);
 
@@ -133,6 +152,7 @@ export function DashboardApp() {
       }]);
     }
     addNotification({ type: 'success', title: 'Added to Cart', message: `${product.name} has been added to your cart` });
+    logActivity(`Added ${product.name} to cart`, 'confirmed');
     setCartOpen(true);
   };
 
@@ -141,8 +161,12 @@ export function DashboardApp() {
   };
 
   const handleRemoveItem = (id: number) => {
+    const item = cartItems.find((cartItem) => cartItem.id === id);
     setCartItems(cartItems.filter(item => item.id !== id));
     addNotification({ type: 'info', title: 'Item Removed', message: 'Item has been removed from your cart' });
+    if (item) {
+      logActivity(`Removed ${item.name} from cart`, 'confirmed');
+    }
   };
 
   const handleCheckout = () => {
@@ -165,6 +189,7 @@ export function DashboardApp() {
     setReceiptOpen(true);
     setCartItems([]);
     addNotification({ type: 'success', title: 'Order Placed Successfully', message: `Your order of $${total.toFixed(2)} has been placed` });
+    logActivity(`Placed a marketplace order worth $${total.toFixed(2)}`, 'completed');
   };
 
   const handleBookWorker = (worker: any) => {
@@ -208,6 +233,12 @@ export function DashboardApp() {
     setBookingModalOpen(false);
     setReceiptOpen(true);
     addNotification({ type: 'success', title: `${bookingType === 'labor' ? 'Worker' : 'Service'} Booked`, message: `${bookingData.itemName} booked for ${bookingData.date} at ${bookingData.time}` });
+    logActivity(
+      bookingType === 'labor'
+        ? `Booked worker ${bookingData.itemName} for ${bookingData.date}`
+        : `Booked service ${bookingData.itemName} for ${bookingData.date}`,
+      'completed',
+    );
   };
 
   const renderContent = () => {
@@ -222,6 +253,13 @@ export function DashboardApp() {
   };
 
   const unreadCount = notifications.filter(n => !n.read).length;
+  const logActivity = (description: string, status: 'completed' | 'confirmed' | 'pending' = 'confirmed') => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    addStoredActivity(sessionUser.id, { description, status });
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 flex flex-col">
@@ -275,8 +313,16 @@ export function DashboardApp() {
                     )}
                   </button>
                   <button onClick={() => updateActiveTab('profile')} className="hidden md:flex items-center space-x-2 hover:bg-gray-100 rounded-xl px-3 py-2 transition-all duration-200">
-                    <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center shadow-md shadow-green-500/20">
-                      <span className="text-sm font-semibold text-white">{getUserInitials(sessionUser?.name)}</span>
+                    <div className="w-8 h-8 overflow-hidden rounded-full bg-white flex items-center justify-center ring-1 ring-gray-200 shadow-sm">
+                      {sessionUser?.profile?.avatarUrl ? (
+                        <SmoothedAvatarImage
+                          src={sessionUser.profile.avatarUrl}
+                          alt={sessionUser.name || 'Profile'}
+                          className="block h-full w-full object-cover object-center"
+                        />
+                      ) : (
+                        <span className="text-sm font-semibold text-green-700">{getUserInitials(sessionUser?.name)}</span>
+                      )}
                     </div>
                   </button>
                 </>

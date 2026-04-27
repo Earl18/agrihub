@@ -2,6 +2,7 @@ export type SessionUser = {
   id: string;
   name: string;
   email: string;
+  emailVerified?: boolean;
   role?: string;
   accountType?: string;
   roles?: string[];
@@ -21,6 +22,7 @@ export type SessionUser = {
     farmSize?: string;
     experience?: string;
     specialization?: string;
+    avatarUrl?: string;
     coordinates?: {
       lat?: number | null;
       lng?: number | null;
@@ -34,6 +36,15 @@ export type SessionUser = {
 
 const TOKEN_KEY = 'agrihub_token';
 const USER_KEY = 'agrihub_user';
+const SESSION_UPDATED_EVENT = 'agrihub:session-updated';
+
+function notifySessionUpdated() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.dispatchEvent(new Event(SESSION_UPDATED_EVENT));
+}
 
 export function getSessionToken() {
   if (typeof window === 'undefined') {
@@ -68,6 +79,7 @@ export function persistSession(token: string, user: SessionUser) {
 
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  notifySessionUpdated();
 }
 
 export function persistSessionUser(user: SessionUser) {
@@ -76,6 +88,7 @@ export function persistSessionUser(user: SessionUser) {
   }
 
   localStorage.setItem(USER_KEY, JSON.stringify(user));
+  notifySessionUpdated();
 }
 
 export function isAuthenticated() {
@@ -89,6 +102,11 @@ export function clearSession() {
 
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  notifySessionUpdated();
+}
+
+export function getSessionUpdatedEventName() {
+  return SESSION_UPDATED_EVENT;
 }
 
 export function getUserInitials(name?: string | null) {

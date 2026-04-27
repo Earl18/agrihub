@@ -1,21 +1,44 @@
 import { useState } from 'react';
-import { Sprout, User, Mail, Phone, Lock, Eye, EyeOff, ArrowRight, CheckCircle2 } from 'lucide-react';
-import { useNavigate, Link, useSearchParams } from 'react-router';
+import { ArrowRight, CheckCircle2, Eye, EyeOff, Lock, Mail, Phone, Sprout, User } from 'lucide-react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { registerUser } from '../../features/auth/api';
+import {
+  registerUser,
+  resendRegistrationCode,
+  verifyRegistrationCode,
+} from '../../features/auth/api';
 import { persistSession } from '../../shared/auth/session';
+
+type VerificationStep = 'form' | 'verify';
 
 export function RegisterPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', confirmPassword: '' });
+  const [step, setStep] = useState<VerificationStep>('form');
+  const [verificationEmail, setVerificationEmail] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [form, setForm] = useState({
+    firstName: '',
+    middleName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    password: '',
+    confirmPassword: '',
+  });
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isResending, setIsResending] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
 
-  const update = (field: string, value: string) => setForm(prev => ({ ...prev, [field]: value }));
+  const update = (field: string, value: string) => setForm((prev) => ({ ...prev, [field]: value }));
+
+  const updatePhone = (value: string) => {
+    update('phone', value.replace(/\D/g, '').slice(0, 11));
+  };
 
   const passwordStrength = () => {
     const p = form.password;
@@ -34,10 +57,30 @@ export function RegisterPage() {
   const strength = passwordStrength();
   const passwordsMatch = form.confirmPassword && form.password === form.confirmPassword;
   const passwordsMismatch = form.confirmPassword && form.password !== form.confirmPassword;
+  const fullName = [form.firstName, form.middleName, form.lastName]
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join(' ');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
+    setSuccessMessage('');
+
+    if (!form.firstName.trim() || !form.lastName.trim()) {
+      setErrorMessage('First name and last name are required.');
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      setErrorMessage('Please enter a valid email address.');
+      return;
+    }
+
+    if (form.phone && !/^09\d{9}$/.test(form.phone.trim())) {
+      setErrorMessage('Please enter a valid Philippine mobile number.');
+      return;
+    }
 
     if (form.password !== form.confirmPassword) {
       setErrorMessage('Passwords do not match.');
@@ -48,14 +91,20 @@ export function RegisterPage() {
 
     try {
       const response = await registerUser({
-        name: form.name,
+        name: fullName,
         email: form.email,
         phone: form.phone,
         password: form.password,
+        profile: {
+          firstName: form.firstName,
+          middleName: form.middleName,
+          lastName: form.lastName,
+        },
       });
 
-      persistSession(response.token, response.user);
-      navigate(searchParams.get('redirect') || '/app');
+      setVerificationEmail(response.email);
+      setSuccessMessage(response.message);
+      setStep('verify');
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Unable to create your account right now.',
@@ -65,11 +114,47 @@ export function RegisterPage() {
     }
   };
 
-  const inputClass = "w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/30 focus:border-green-500 transition-all duration-200";
+  const handleVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsLoading(true);
+
+    try {
+      const response = await verifyRegistrationCode(verificationEmail, verificationCode);
+      persistSession(response.token, response.user);
+      navigate(searchParams.get('redirect') || '/app');
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Unable to verify your email right now.',
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResend = async () => {
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsResending(true);
+
+    try {
+      const response = await resendRegistrationCode(verificationEmail);
+      setSuccessMessage(response.message);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Unable to resend the verification code right now.',
+      );
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  const inputClass =
+    'w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/30 focus:border-green-500 transition-all duration-200';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 flex">
-      {/* Left — Illustration */}
       <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-green-600/90 to-green-800/90 z-10" />
         <ImageWithFallback
@@ -119,10 +204,8 @@ export function RegisterPage() {
         </div>
       </div>
 
-      {/* Right — Registration Form */}
       <div className="w-full lg:w-1/2 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">
-          {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center space-x-3 mb-8 cursor-pointer" onClick={() => navigate('/')}>
             <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/30">
               <Sprout className="w-6 h-6 text-white" />
@@ -132,100 +215,164 @@ export function RegisterPage() {
 
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
             <div className="mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 mb-1">Create Account</h2>
-              <p className="text-sm text-gray-500">Join AgriHub and start buying fresh products</p>
+              <h2 className="text-2xl font-bold text-gray-900 mb-1">
+                {step === 'form' ? 'Create Account' : 'Verify Email'}
+              </h2>
+              <p className="text-sm text-gray-500">
+                {step === 'form'
+                  ? 'Join AgriHub and start buying fresh products'
+                  : `Enter the code sent to ${verificationEmail}`}
+              </p>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {errorMessage ? (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {errorMessage}
-                </div>
-              ) : null}
-
-              {/* Full Name */}
-              <div>
-                <label className="block text-sm text-gray-700 mb-1.5">Full Name</label>
-                <div className="relative">
-                  <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
-                  <input type="text" value={form.name} onChange={(e) => update('name', e.target.value)} placeholder="John Doe" className={inputClass} />
-                </div>
+            {(errorMessage || successMessage) ? (
+              <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+                errorMessage
+                  ? 'border-red-200 bg-red-50 text-red-700'
+                  : 'border-green-200 bg-green-50 text-green-700'
+              }`}>
+                {errorMessage || successMessage}
               </div>
+            ) : null}
 
-              {/* Email */}
-              <div>
-                <label className="block text-sm text-gray-700 mb-1.5">Email</label>
-                <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
-                  <input type="email" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="you@example.com" className={inputClass} />
-                </div>
-              </div>
-
-              {/* Phone */}
-              <div>
-                <label className="block text-sm text-gray-700 mb-1.5">Phone Number</label>
-                <div className="relative">
-                  <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
-                  <input type="tel" value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="+1 (555) 000-0000" className={inputClass} />
-                </div>
-              </div>
-
-              {/* Password */}
-              <div>
-                <label className="block text-sm text-gray-700 mb-1.5">Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
-                  <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => update('password', e.target.value)} placeholder="Create a password" className="w-full pl-11 pr-12 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/30 focus:border-green-500 transition-all duration-200" />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors">
-                    {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
-                  </button>
-                </div>
-                {form.password && (
-                  <div className="mt-2">
-                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                      <div className={`h-full ${strength.color} rounded-full transition-all duration-300`} style={{ width: strength.width }} />
-                    </div>
-                    <p className="text-xs text-gray-400 mt-1">Password strength: <span className="font-medium">{strength.label}</span></p>
+            {step === 'form' ? (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">First Name</label>
+                  <div className="relative">
+                    <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input type="text" value={form.firstName} onChange={(e) => update('firstName', e.target.value)} placeholder="Juan" className={inputClass} />
                   </div>
-                )}
-              </div>
-
-              {/* Confirm Password */}
-              <div>
-                <label className="block text-sm text-gray-700 mb-1.5">Confirm Password</label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
-                  <input type={showConfirm ? 'text' : 'password'} value={form.confirmPassword} onChange={(e) => update('confirmPassword', e.target.value)} placeholder="Confirm your password"
-                    className={`w-full pl-11 pr-12 py-3 bg-gray-50 border rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 transition-all duration-200 ${passwordsMismatch ? 'border-red-300 focus:ring-red-500/30 focus:border-red-500' : passwordsMatch ? 'border-green-300 focus:ring-green-500/30 focus:border-green-500' : 'border-gray-200 focus:ring-green-500/30 focus:border-green-500'}`}
-                  />
-                  <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors">
-                    {showConfirm ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
-                  </button>
                 </div>
-                {passwordsMismatch && <p className="text-xs text-red-500 mt-1">Passwords do not match</p>}
-                {passwordsMatch && <p className="text-xs text-green-600 mt-1">Passwords match</p>}
-              </div>
 
-              {/* Terms */}
-              <label className="flex items-start space-x-2.5 cursor-pointer pt-1">
-                <input type="checkbox" checked={agreedToTerms} onChange={(e) => setAgreedToTerms(e.target.checked)} className="w-4 h-4 mt-0.5 rounded border-gray-300 text-green-600 focus:ring-green-500 accent-green-600" />
-                <span className="text-sm text-gray-500">I agree to the <Link to="/terms" className="text-green-600 hover:text-green-700">Terms of Service</Link> and <Link to="/privacy" className="text-green-600 hover:text-green-700">Privacy Policy</Link></span>
-              </label>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Middle Name</label>
+                  <div className="relative">
+                    <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input type="text" value={form.middleName} onChange={(e) => update('middleName', e.target.value)} placeholder="Optional" className={inputClass} />
+                  </div>
+                </div>
 
-              {/* Submit */}
-              <button type="submit" disabled={isLoading || !agreedToTerms}
-                className="w-full flex items-center justify-center space-x-2 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl shadow-lg shadow-green-500/30 hover:shadow-xl hover:shadow-green-500/40 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed mt-2"
-              >
-                {isLoading ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <span>Create Account</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </form>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Last Name</label>
+                  <div className="relative">
+                    <User className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input type="text" value={form.lastName} onChange={(e) => update('lastName', e.target.value)} placeholder="Dela Cruz" className={inputClass} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Email</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input type="email" value={form.email} onChange={(e) => update('email', e.target.value)} placeholder="name@example.com" className={inputClass} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Phone Number</label>
+                  <div className="relative">
+                    <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input type="tel" inputMode="numeric" value={form.phone} onChange={(e) => updatePhone(e.target.value)} placeholder="09XX XXX XXXX" className={inputClass} />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input type={showPassword ? 'text' : 'password'} value={form.password} onChange={(e) => update('password', e.target.value)} placeholder="Create a password" className="w-full pl-11 pr-12 py-3 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500/30 focus:border-green-500 transition-all duration-200" />
+                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors">
+                      {showPassword ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                    </button>
+                  </div>
+                  {form.password && (
+                    <div className="mt-2">
+                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full ${strength.color} rounded-full transition-all duration-300`} style={{ width: strength.width }} />
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">Password strength: <span className="font-medium">{strength.label}</span></p>
+                    </div>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Confirm Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input
+                      type={showConfirm ? 'text' : 'password'}
+                      value={form.confirmPassword}
+                      onChange={(e) => update('confirmPassword', e.target.value)}
+                      placeholder="Confirm your password"
+                      className={`w-full pl-11 pr-12 py-3 bg-gray-50 border rounded-xl text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 transition-all duration-200 ${passwordsMismatch ? 'border-red-300 focus:ring-red-500/30 focus:border-red-500' : passwordsMatch ? 'border-green-300 focus:ring-green-500/30 focus:border-green-500' : 'border-gray-200 focus:ring-green-500/30 focus:border-green-500'}`}
+                    />
+                    <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors">
+                      {showConfirm ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                    </button>
+                  </div>
+                  {passwordsMismatch && <p className="text-xs text-red-500 mt-1">Passwords do not match</p>}
+                  {passwordsMatch && <p className="text-xs text-green-600 mt-1">Passwords match</p>}
+                </div>
+
+                <label className="flex items-start space-x-2.5 cursor-pointer pt-1">
+                  <input type="checkbox" checked={agreedToTerms} onChange={(e) => setAgreedToTerms(e.target.checked)} className="w-4 h-4 mt-0.5 rounded border-gray-300 text-green-600 focus:ring-green-500 accent-green-600" />
+                  <span className="text-sm text-gray-500">I agree to the <Link to="/terms" className="text-green-600 hover:text-green-700">Terms of Service</Link> and <Link to="/privacy" className="text-green-600 hover:text-green-700">Privacy Policy</Link></span>
+                </label>
+
+                <button type="submit" disabled={isLoading || !agreedToTerms}
+                  className="w-full flex items-center justify-center space-x-2 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl shadow-lg shadow-green-500/30 hover:shadow-xl hover:shadow-green-500/40 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed mt-2"
+                >
+                  {isLoading ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <span>Create Account</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleVerify} className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Verification Code</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={verificationCode}
+                      onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                      placeholder="Enter 6-digit code"
+                      className={inputClass}
+                    />
+                  </div>
+                </div>
+
+                <button type="submit" disabled={isLoading}
+                  className="w-full flex items-center justify-center space-x-2 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl shadow-lg shadow-green-500/30 hover:shadow-xl hover:shadow-green-500/40 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed mt-2"
+                >
+                  {isLoading ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <span>Verify Email</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={isResending}
+                  className="w-full rounded-xl border border-green-200 py-3 text-sm font-medium text-green-700 transition-colors hover:bg-green-50 disabled:opacity-60"
+                >
+                  {isResending ? 'Resending...' : 'Resend Code'}
+                </button>
+              </form>
+            )}
 
             <p className="text-center text-sm text-gray-500 mt-6">
               Already have an account?{' '}

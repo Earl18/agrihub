@@ -1,7 +1,34 @@
 import { User } from '../models/User.js';
+import { appendActivity, getUserActivities } from '../utils/activityLog.js';
 import { getUserRoles, getVerificationState, hasRole, roleQuery } from '../utils/roles.js';
+import {
+  createProfileAvatarUploadTarget,
+  createProfileAvatarSignedUrl,
+  createVerificationUploadTarget,
+  extractProfileAvatarPath,
+} from '../utils/verificationStorage.js';
 
-function sanitizeUser(user) {
+async function sanitizeProfile(profile) {
+  const plainProfile = profile?.toObject?.() || profile || {};
+  const avatarPath = plainProfile.avatarPath || extractProfileAvatarPath(plainProfile.avatarUrl || '');
+
+  if (!avatarPath) {
+    return plainProfile;
+  }
+
+  try {
+    const { url } = await createProfileAvatarSignedUrl(avatarPath);
+    return {
+      ...plainProfile,
+      avatarPath,
+      avatarUrl: url,
+    };
+  } catch {
+    return plainProfile;
+  }
+}
+
+async function sanitizeUser(user) {
   return {
     id: user._id.toString(),
     name: user.name,
@@ -11,13 +38,16 @@ function sanitizeUser(user) {
     accountType: user.accountType,
     roles: getUserRoles(user),
     verification: getVerificationState(user),
-    profile: user.profile,
+    profile: await sanitizeProfile(user.profile),
   };
 }
 
 function getProfileStats(user) {
   const verification = getVerificationState(user);
   const listings = user.marketplaceListings || [];
+  const activeJobs = Array.isArray(user.laborProfile?.activeBookings)
+    ? user.laborProfile.activeBookings.length
+    : 0;
   const totalSales = listings.reduce(
     (sum, listing) => sum + Number(listing.price || 0) * Number(listing.orders || 0),
     0,
@@ -53,12 +83,20 @@ function getProfileStats(user) {
     });
   }
 
+  if (verification.laborer === 'verified') {
+    stats.push({
+      label: 'Active Jobs',
+      value: String(activeJobs),
+      color: 'text-teal-600',
+    });
+  }
+
   return stats;
 }
 
 export async function getCurrentUser(req, res) {
   res.json({
-    user: sanitizeUser(req.user),
+    user: await sanitizeUser(req.user),
     stats: getProfileStats(req.user),
   });
 }
@@ -66,13 +104,27 @@ export async function getCurrentUser(req, res) {
 export async function updateCurrentUser(req, res, next) {
   try {
     const { name, email, phone, profile = {} } = req.body;
+    const nextName = typeof name === 'string' ? name.trim() : req.user.name;
+    const nextEmail = typeof email === 'string' ? email.trim().toLowerCase() : req.user.email;
+    const nextPhone = typeof phone === 'string' ? phone.trim() : req.user.phone;
+    const nextProfile = {
+      ...req.user.profile?.toObject?.(),
+      ...req.user.profile,
+      ...profile,
+    };
+    const previousSnapshot = JSON.stringify({
+      name: req.user.name,
+      email: req.user.email,
+      phone: req.user.phone,
+      profile: req.user.profile?.toObject?.() || req.user.profile || {},
+    });
 
     if (typeof name === 'string') {
-      req.user.name = name.trim();
+      req.user.name = nextName;
     }
 
     if (typeof email === 'string') {
-      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedEmail = nextEmail;
 
       if (!normalizedEmail) {
         return res.status(400).json({
@@ -95,105 +147,42 @@ export async function updateCurrentUser(req, res, next) {
     }
 
     if (typeof phone === 'string') {
-      req.user.phone = phone.trim();
+      req.user.phone = nextPhone;
     }
 
-    req.user.profile = {
-      ...req.user.profile?.toObject?.(),
-      ...req.user.profile,
-      ...profile,
-    };
+    if (typeof profile.avatarPath === 'string' && profile.avatarPath.trim()) {
+      profile.avatarPath = profile.avatarPath.trim();
+    }
+
+    req.user.profile = nextProfile;
 
     if (!req.user.profile.firstName && typeof name === 'string') {
       req.user.profile.firstName = name.trim();
+    }
+
+    const nextSnapshot = JSON.stringify({
+      name: req.user.name,
+      email: req.user.email,
+      phone: req.user.phone,
+      profile: req.user.profile,
+    });
+
+    if (previousSnapshot !== nextSnapshot) {
+      appendActivity(req.user, {
+        description: 'Updated profile information',
+        status: 'confirmed',
+      });
     }
 
     await req.user.save();
 
     res.json({
       message: 'Profile updated successfully.',
-      user: sanitizeUser(req.user),
+      user: await sanitizeUser(req.user),
     });
   } catch (error) {
     next(error);
   }
-}
-
-function buildRoleDashboardSections(user) {
-  const roles = getUserRoles(user);
-  const sections = [];
-
-  sections.push({
-    role: 'buyer',
-    title: 'Buyer Dashboard',
-    description: 'Purchase goods, hire workers, and acquire services.',
-    stats: [
-      { label: 'Active Roles', value: String(roles.length) },
-      { label: 'Services Booked', value: String(user.serviceProfile?.bookings?.length || 0) },
-      { label: 'Workers Hired', value: String(0) },
-    ],
-    highlights: [
-      'You can browse the marketplace, hire laborers, and book service providers.',
-      'Seller and laborer tools stay locked until the matching verification succeeds.',
-    ],
-  });
-
-  if (hasRole(user, 'seller')) {
-    const listings = user.marketplaceListings || [];
-    sections.push({
-      role: 'seller',
-      title: 'Seller Dashboard',
-      description: 'Manage listings and track marketplace performance.',
-      stats: [
-        { label: 'Listings', value: String(listings.length) },
-        {
-          label: 'Orders',
-          value: String(listings.reduce((sum, listing) => sum + Number(listing.orders || 0), 0)),
-        },
-        {
-          label: 'Views',
-          value: String(listings.reduce((sum, listing) => sum + Number(listing.views || 0), 0)),
-        },
-      ],
-      highlights: listings.length
-        ? listings.slice(0, 3).map((listing) => `${listing.name}: ${listing.stock} ${listing.unit} available`)
-        : ['Your seller verification is active. You can now add and manage marketplace listings.'],
-    });
-  }
-
-  if (hasRole(user, 'laborer')) {
-    const activeJobs = user.laborProfile?.activeBookings || [];
-    const completedJobs = user.laborProfile?.bookingHistory || [];
-    sections.push({
-      role: 'laborer',
-      title: 'Laborer Dashboard',
-      description: 'Offer farm labor services and manage your job activity.',
-      stats: [
-        { label: 'Skills', value: String(user.laborProfile?.skills?.length || 0) },
-        { label: 'Active Jobs', value: String(activeJobs.length) },
-        { label: 'Completed Jobs', value: String(completedJobs.length) },
-      ],
-      highlights: activeJobs.length
-        ? activeJobs.slice(0, 3).map((job) => `${job.worker} booked on ${job.date} at ${job.time}`)
-        : ['Your laborer verification is active. You can now offer labor services and accept jobs.'],
-    });
-  }
-
-  if (hasRole(user, 'service')) {
-    sections.push({
-      role: 'service',
-      title: 'Service Dashboard',
-      description: 'Operate your service catalog and provider bookings.',
-      stats: [
-        { label: 'Services', value: String(user.serviceProfile?.services?.length || 0) },
-        { label: 'Bookings', value: String(user.serviceProfile?.bookings?.length || 0) },
-        { label: 'Category', value: user.serviceProfile?.category || 'N/A' },
-      ],
-      highlights: ['Your service-provider tools are active for this account.'],
-    });
-  }
-
-  return sections;
 }
 
 export async function applyForRole(req, res, next) {
@@ -211,15 +200,52 @@ export async function applyForRole(req, res, next) {
     }
 
     const now = new Date();
+    const documents = Array.isArray(application.documents) ? application.documents : [];
+    const details = application.details || {};
+    const idNumber = String(details.idNumber || '').trim();
+
+    if (!details.idType || !idNumber) {
+      return res.status(400).json({
+        message: 'KYC requires an ID type and ID number.',
+      });
+    }
+
+    if (!/^\d+$/.test(idNumber)) {
+      return res.status(400).json({
+        message: 'ID number must contain numbers only.',
+      });
+    }
+
+    if (!details.addressConfirmed || !details.selfieConfirmed || !details.riskAccepted || !details.consentAccepted) {
+      return res.status(400).json({
+        message: 'Please complete all identity and consent confirmations before submitting verification.',
+      });
+    }
 
     if (role === 'seller') {
-      if (!application.documents?.validId || !application.documents?.selfieWithId) {
+      const sellerDocumentTypes = new Set(documents.map((document) => document?.type));
+
+      if (!details.farmProofType) {
         return res.status(400).json({
-          message: 'Seller verification requires a valid ID and a selfie with ID.',
+          message: 'Seller KYC requires you to choose the farm proof document type.',
         });
       }
 
-      if (!application.documents?.barangayCertificate && !application.documents?.farmPhotos && !application.documents?.rsbsa) {
+      if (
+        !sellerDocumentTypes.has('id-front') ||
+        !sellerDocumentTypes.has('id-back') ||
+        !sellerDocumentTypes.has('selfie')
+      ) {
+        return res.status(400).json({
+          message: 'Seller KYC requires ID front, ID back, and a clear selfie.',
+        });
+      }
+
+      if (
+        !sellerDocumentTypes.has('barangay-certificate') &&
+        !sellerDocumentTypes.has('farm-photos') &&
+        !sellerDocumentTypes.has('rsbsa')
+      ) {
         return res.status(400).json({
           message: 'Seller verification requires at least one farm proof document.',
         });
@@ -231,16 +257,32 @@ export async function applyForRole(req, res, next) {
 
       req.user.accountType = 'vendor';
       req.user.verification.seller = {
-        status: 'verified',
+        status: 'pending',
         submittedAt: now,
-        verifiedAt: now,
+        verifiedAt: null,
+        documents,
+        details: {
+          idType: details.idType,
+          idNumber,
+          farmProofType: details.farmProofType,
+          addressConfirmed: Boolean(details.addressConfirmed),
+          selfieConfirmed: Boolean(details.selfieConfirmed),
+          riskAccepted: Boolean(details.riskAccepted),
+          consentAccepted: Boolean(details.consentAccepted),
+        },
       };
     }
 
     if (role === 'laborer') {
-      if (!application.documents?.validId || !application.documents?.selfie) {
+      const laborerDocumentTypes = new Set(documents.map((document) => document?.type));
+
+      if (
+        !laborerDocumentTypes.has('id-front') ||
+        !laborerDocumentTypes.has('id-back') ||
+        !laborerDocumentTypes.has('selfie')
+      ) {
         return res.status(400).json({
-          message: 'Laborer verification requires a valid ID and a selfie.',
+          message: 'Laborer KYC requires ID front, ID back, and a clear selfie.',
         });
       }
 
@@ -250,29 +292,118 @@ export async function applyForRole(req, res, next) {
         });
       }
 
+      if (!details.laborProofType) {
+        return res.status(400).json({
+          message: 'Laborer KYC requires you to choose the proof document type.',
+        });
+      }
+
+      if (!laborerDocumentTypes.has('work-proof')) {
+        return res.status(400).json({
+          message: 'Laborer KYC requires the selected work proof document.',
+        });
+      }
+
+      if (!String(application.experience || '').trim()) {
+        return res.status(400).json({
+          message: 'Laborer KYC requires your work experience.',
+        });
+      }
+
+      if (!String(application.description || '').trim()) {
+        return res.status(400).json({
+          message: 'Laborer KYC requires a work summary.',
+        });
+      }
+
       if (!req.user.roles.includes('laborer')) {
         req.user.roles.push('laborer');
       }
 
       req.user.accountType = 'laborer';
       req.user.verification.laborer = {
-        status: 'verified',
+        status: 'pending',
         submittedAt: now,
-        verifiedAt: now,
+        verifiedAt: null,
+        documents,
+        details: {
+          idType: details.idType,
+          idNumber,
+          farmProofType: '',
+          addressConfirmed: Boolean(details.addressConfirmed),
+          selfieConfirmed: Boolean(details.selfieConfirmed),
+          riskAccepted: Boolean(details.riskAccepted),
+          consentAccepted: Boolean(details.consentAccepted),
+          experience: String(application.experience || '').trim(),
+          description: String(application.description || '').trim(),
+          laborProofType: details.laborProofType,
+          skills: application.skills,
+        },
       };
       req.user.laborProfile.workerType = application.skills[0];
       req.user.laborProfile.skills = application.skills;
       req.user.laborProfile.availability = req.user.laborProfile.availability || 'Available';
-      req.user.profile.experience = application.experience || req.user.profile.experience;
-      req.user.profile.specialization = application.description || req.user.profile.specialization;
+      req.user.profile.experience = String(application.experience || '').trim() || req.user.profile.experience;
+      req.user.profile.specialization = String(application.description || '').trim() || req.user.profile.specialization;
     }
 
     await req.user.save();
 
-    res.json({
-      message: `${role.charAt(0).toUpperCase() + role.slice(1)} verification successful.`,
-      user: sanitizeUser(req.user),
+    appendActivity(req.user, {
+      description: `${role.charAt(0).toUpperCase() + role.slice(1)} verification submitted`,
+      status: 'pending',
+      createdAt: now,
     });
+    await req.user.save();
+
+    res.json({
+      message: `${role.charAt(0).toUpperCase() + role.slice(1)} verification submitted. It is now pending review.`,
+      user: await sanitizeUser(req.user),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function createVerificationUploadUrl(req, res, next) {
+  try {
+    const { role, documentType, fileName } = req.body || {};
+
+    if (!role || !documentType || !fileName) {
+      return res.status(400).json({
+        message: 'Role, document type, and file name are required.',
+      });
+    }
+
+    const upload = await createVerificationUploadTarget({
+      userId: req.user._id.toString(),
+      role,
+      documentType,
+      fileName,
+    });
+
+    res.json(upload);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function createProfileAvatarUploadUrl(req, res, next) {
+  try {
+    const { fileName } = req.body || {};
+
+    if (!fileName) {
+      return res.status(400).json({
+        message: 'File name is required.',
+      });
+    }
+
+    const upload = await createProfileAvatarUploadTarget({
+      userId: req.user._id.toString(),
+      fileName,
+    });
+
+    res.json(upload);
   } catch (error) {
     next(error);
   }
@@ -281,35 +412,15 @@ export async function applyForRole(req, res, next) {
 export async function getDashboardData(req, res, next) {
   try {
     const user = req.user;
-    const recentActivities = [
-      {
-        id: 1,
-        description: `${user.name} signed in to AgriHub`,
-        time: 'Just now',
-        status: 'completed',
-      },
-      {
-        id: 2,
-        description: 'Marketplace access is ready for your next purchase.',
-        time: 'Live',
-        status: 'confirmed',
-      },
-      {
-        id: 3,
-        description: 'Worker hiring tools are available from your dashboard.',
-        time: 'Live',
-        status: 'confirmed',
-      },
-      {
-        id: 4,
-        description: 'Service booking is available whenever you need it.',
-        time: 'Live',
-        status: 'pending',
-      },
-    ];
+    const recentActivities = getUserActivities(user).map((activity, index) => ({
+      id: `${new Date(activity.createdAt).getTime()}-${index}`,
+      description: activity.description,
+      status: activity.status || 'confirmed',
+      createdAt: new Date(activity.createdAt).toISOString(),
+    }));
 
     res.json({
-      user: sanitizeUser(user),
+      user: await sanitizeUser(user),
       stats: getProfileStats(user).map((stat, index) => ({
         ...stat,
         change:
@@ -319,15 +430,19 @@ export async function getDashboardData(req, res, next) {
               ? 'buyer purchases'
               : stat.label === 'Workers Hired'
                 ? 'labor bookings'
-                : 'service bookings',
-        color:
+                : stat.label === 'Active Jobs'
+                  ? 'worker jobs'
+                  : 'service bookings',
+        tone:
           stat.label === 'Total Sales'
-            ? 'from-green-500 to-emerald-600'
+            ? 'sales'
             : stat.label === 'Total Purchases'
-              ? 'from-blue-500 to-blue-600'
+              ? 'purchases'
               : stat.label === 'Workers Hired'
-                ? 'from-purple-500 to-purple-600'
-                : 'from-orange-500 to-orange-600',
+                ? 'workers'
+                : stat.label === 'Active Jobs'
+                  ? 'laborer'
+                  : 'services',
         icon:
           stat.label === 'Total Sales'
             ? 'DollarSign'
@@ -335,12 +450,13 @@ export async function getDashboardData(req, res, next) {
               ? 'DollarSign'
               : stat.label === 'Workers Hired'
                 ? 'Users'
-                : 'Truck',
+                : stat.label === 'Active Jobs'
+                  ? 'TrendingUp'
+                  : 'Truck',
         id: index,
       })),
       recentActivities,
       upcomingTasks: [],
-      roleSections: buildRoleDashboardSections(user),
     });
   } catch (error) {
     next(error);

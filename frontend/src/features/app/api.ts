@@ -33,3 +33,31 @@ export function applyForRole(payload: any) {
     body: payload,
   });
 }
+
+export function createVerificationUploadUrl(payload: {
+  role: 'seller' | 'laborer';
+  documentType: string;
+  fileName: string;
+}) {
+  return apiRequest<{
+    bucket: string;
+    path: string;
+    token: string;
+    signedUrl: string;
+  }>('/data/verification/upload-url', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export function createProfileAvatarUploadUrl(payload: { fileName: string }) {
+  return apiRequest<{
+    bucket: string;
+    path: string;
+    token: string;
+    signedUrl: string;
+  }>('/data/profile/avatar/upload-url', {
+    method: 'POST',
+    body: payload,
+  });
+}

@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Sprout, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, Lock, Mail, Sprout, X } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import {
   getGoogleAuthConfig,
   loginUser,
   loginWithGoogle,
+  requestPasswordReset,
+  resetPassword,
+  verifyPasswordResetCode,
 } from '../../features/auth/api';
 import { persistSession } from '../../shared/auth/session';
+
+type ResetStep = 'request' | 'verify' | 'reset';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -20,6 +25,17 @@ export function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [googleClientId, setGoogleClientId] = useState('');
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetStep, setResetStep] = useState<ResetStep>('request');
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [resetPasswordValue, setResetPasswordValue] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState('');
+  const [resetSuccess, setResetSuccess] = useState('');
 
   useEffect(() => {
     let isMounted = true;
@@ -68,14 +84,11 @@ export function LoginPage() {
             persistSession(response.token, response.user);
 
             const redirectTarget = searchParams.get('redirect');
-            const isAdmin =
-              response.user.email.toLowerCase() === 'admin@agrihub.com';
+            const isAdmin = response.user.email.toLowerCase() === 'admin@agrihub.com';
             navigate(redirectTarget || (isAdmin ? '/admin' : '/app'));
           } catch (error) {
             setErrorMessage(
-              error instanceof Error
-                ? error.message
-                : 'Google sign-in failed. Please try again.',
+              error instanceof Error ? error.message : 'Google sign-in failed. Please try again.',
             );
           } finally {
             setIsLoading(false);
@@ -110,6 +123,29 @@ export function LoginPage() {
     document.head.appendChild(script);
   }, [googleClientId, navigate, searchParams]);
 
+  const resetFormState = () => {
+    setResetStep('request');
+    setResetCode('');
+    setResetPasswordValue('');
+    setResetConfirmPassword('');
+    setResetError('');
+    setResetSuccess('');
+    setResetLoading(false);
+    setShowResetPassword(false);
+    setShowResetConfirmPassword(false);
+  };
+
+  const openResetModal = () => {
+    setResetEmail(email.trim());
+    resetFormState();
+    setResetOpen(true);
+  };
+
+  const closeResetModal = () => {
+    setResetOpen(false);
+    resetFormState();
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
@@ -131,9 +167,75 @@ export function LoginPage() {
     }
   };
 
+  const handleRequestResetCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError('');
+    setResetSuccess('');
+    setResetLoading(true);
+
+    try {
+      const response = await requestPasswordReset(resetEmail);
+      setResetSuccess(response.message);
+      setResetStep('verify');
+    } catch (error) {
+      setResetError(
+        error instanceof Error ? error.message : 'Unable to send a verification code right now.',
+      );
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleVerifyResetCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError('');
+    setResetSuccess('');
+    setResetLoading(true);
+
+    try {
+      const response = await verifyPasswordResetCode(resetEmail, resetCode);
+      setResetSuccess(response.message);
+      setResetStep('reset');
+    } catch (error) {
+      setResetError(
+        error instanceof Error ? error.message : 'Unable to verify the code right now.',
+      );
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setResetError('');
+    setResetSuccess('');
+
+    if (resetPasswordValue !== resetConfirmPassword) {
+      setResetError('The new passwords do not match.');
+      return;
+    }
+
+    setResetLoading(true);
+
+    try {
+      const response = await resetPassword(resetEmail, resetCode, resetPasswordValue);
+      setResetSuccess(response.message);
+      setPassword('');
+      setEmail(resetEmail);
+      window.setTimeout(() => {
+        closeResetModal();
+      }, 1200);
+    } catch (error) {
+      setResetError(
+        error instanceof Error ? error.message : 'Unable to change your password right now.',
+      );
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 flex">
-      {/* Left — Illustration (hidden on mobile) */}
       <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-green-600/90 to-green-800/90 z-10" />
         <ImageWithFallback
@@ -142,7 +244,6 @@ export function LoginPage() {
           className="absolute inset-0 w-full h-full object-cover"
         />
         <div className="relative z-20 flex flex-col justify-between p-12 w-full">
-          {/* Top logo */}
           <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate('/')}>
             <div className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center border border-white/30">
               <Sprout className="w-6 h-6 text-white" />
@@ -150,13 +251,12 @@ export function LoginPage() {
             <span className="text-xl font-bold text-white">AgriHub</span>
           </div>
 
-          {/* Center content */}
           <div className="max-w-md">
             <h2 className="text-4xl font-bold text-white leading-tight mb-4">
               Grow your business with smarter farming
             </h2>
             <p className="text-green-100 leading-relaxed">
-              Join thousands of farmers who manage their marketplace, labor, and services — all in one place.
+              Join thousands of farmers who manage their marketplace, labor, and services all in one place.
             </p>
             <div className="flex items-center space-x-8 mt-10">
               <div>
@@ -176,7 +276,6 @@ export function LoginPage() {
             </div>
           </div>
 
-          {/* Bottom testimonial */}
           <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20 max-w-md">
             <p className="text-white/90 text-sm leading-relaxed mb-4">
               "AgriHub transformed the way I sell my produce. I went from local markets to nationwide delivery in just weeks."
@@ -194,10 +293,8 @@ export function LoginPage() {
         </div>
       </div>
 
-      {/* Right — Login Form */}
       <div className="w-full lg:w-1/2 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">
-          {/* Mobile logo */}
           <div className="lg:hidden flex items-center justify-center space-x-3 mb-10 cursor-pointer" onClick={() => navigate('/')}>
             <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/30">
               <Sprout className="w-6 h-6 text-white" />
@@ -205,15 +302,12 @@ export function LoginPage() {
             <h1 className="text-xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">AgriHub</h1>
           </div>
 
-          {/* Card */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-            {/* Header */}
             <div className="mb-8">
               <h2 className="text-2xl font-bold text-gray-900 mb-1">Welcome Back</h2>
               <p className="text-sm text-gray-500">Login to your AgriHub account</p>
             </div>
 
-            {/* Form */}
             <form onSubmit={handleLogin} className="space-y-5">
               {errorMessage ? (
                 <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -221,7 +315,6 @@ export function LoginPage() {
                 </div>
               ) : null}
 
-              {/* Email */}
               <div>
                 <label className="block text-sm text-gray-700 mb-1.5">Email or Phone</label>
                 <div className="relative">
@@ -236,7 +329,6 @@ export function LoginPage() {
                 </div>
               </div>
 
-              {/* Password */}
               <div>
                 <label className="block text-sm text-gray-700 mb-1.5">Password</label>
                 <div className="relative">
@@ -258,7 +350,6 @@ export function LoginPage() {
                 </div>
               </div>
 
-              {/* Remember + Forgot */}
               <div className="flex items-center justify-between">
                 <label className="flex items-center space-x-2 cursor-pointer">
                   <input
@@ -269,12 +360,15 @@ export function LoginPage() {
                   />
                   <span className="text-sm text-gray-600">Remember me</span>
                 </label>
-                <a href="#" className="text-sm text-green-600 hover:text-green-700 transition-colors">
+                <button
+                  type="button"
+                  onClick={openResetModal}
+                  className="text-sm text-green-600 hover:text-green-700 transition-colors"
+                >
                   Forgot Password?
-                </a>
+                </button>
               </div>
 
-              {/* Login Button */}
               <button
                 type="submit"
                 disabled={isLoading}
@@ -291,14 +385,12 @@ export function LoginPage() {
               </button>
             </form>
 
-            {/* Divider */}
             <div className="flex items-center my-6">
               <div className="flex-1 h-px bg-gray-200" />
               <span className="px-4 text-xs text-gray-400">or continue with</span>
               <div className="flex-1 h-px bg-gray-200" />
             </div>
 
-            {/* Google Button */}
             {googleClientId ? (
               <div className="flex justify-center">
                 <div ref={googleButtonRef} className="w-full flex justify-center" />
@@ -318,7 +410,6 @@ export function LoginPage() {
               </p>
             ) : null}
 
-            {/* Register link */}
             <p className="text-center text-sm text-gray-500 mt-6">
               Don't have an account?{' '}
               <button
@@ -330,12 +421,165 @@ export function LoginPage() {
             </p>
           </div>
 
-          {/* Footer */}
           <p className="text-center text-xs text-gray-400 mt-6">
             &copy; 2026 AgriHub. Empowering farmers with technology.
           </p>
         </div>
       </div>
+
+      {resetOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-3xl border border-gray-100 bg-white p-8 shadow-2xl">
+            <div className="mb-6 flex items-start justify-between">
+              <div>
+                <h3 className="text-2xl font-bold text-gray-900">Reset Password</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  {resetStep === 'request'
+                    ? 'Enter your account email to receive a verification code.'
+                    : resetStep === 'verify'
+                      ? 'Enter the code sent to your email to continue.'
+                      : 'Choose a new password for your account.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeResetModal}
+                className="rounded-xl p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {resetError ? (
+              <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {resetError}
+              </div>
+            ) : null}
+            {resetSuccess ? (
+              <div className="mb-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+                {resetSuccess}
+              </div>
+            ) : null}
+
+            {resetStep === 'request' ? (
+              <form onSubmit={handleRequestResetCode} className="space-y-5">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Email</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4.5 w-4.5 text-gray-400" />
+                    <input
+                      type="email"
+                      value={resetEmail}
+                      onChange={(e) => setResetEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="w-full rounded-xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-4 text-sm text-gray-900 placeholder-gray-400 transition-all duration-200 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/30"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={resetLoading}
+                  className="w-full rounded-xl bg-gradient-to-r from-green-500 to-green-600 py-3 text-sm font-semibold text-white shadow-lg shadow-green-500/30 transition-all duration-200 hover:shadow-xl hover:shadow-green-500/40 disabled:opacity-70"
+                >
+                  {resetLoading ? 'Sending code...' : 'Send Verification Code'}
+                </button>
+              </form>
+            ) : null}
+
+            {resetStep === 'verify' ? (
+              <form onSubmit={handleVerifyResetCode} className="space-y-5">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Verification Code</label>
+                  <input
+                    type="text"
+                    value={resetCode}
+                    onChange={(e) => setResetCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="Enter 6-digit code"
+                    className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm tracking-[0.3em] text-gray-900 placeholder-gray-400 transition-all duration-200 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/30"
+                  />
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setResetStep('request')}
+                    className="flex-1 rounded-xl border border-gray-200 py-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="flex-1 rounded-xl bg-gradient-to-r from-green-500 to-green-600 py-3 text-sm font-semibold text-white shadow-lg shadow-green-500/30 transition-all duration-200 hover:shadow-xl hover:shadow-green-500/40 disabled:opacity-70"
+                  >
+                    {resetLoading ? 'Verifying...' : 'Verify Code'}
+                  </button>
+                </div>
+              </form>
+            ) : null}
+
+            {resetStep === 'reset' ? (
+              <form onSubmit={handleResetPassword} className="space-y-5">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">New Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4.5 w-4.5 text-gray-400" />
+                    <input
+                      type={showResetPassword ? 'text' : 'password'}
+                      value={resetPasswordValue}
+                      onChange={(e) => setResetPasswordValue(e.target.value)}
+                      placeholder="Enter your new password"
+                      className="w-full rounded-xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-12 text-sm text-gray-900 placeholder-gray-400 transition-all duration-200 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/30"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowResetPassword(!showResetPassword)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showResetPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1.5">Confirm Password</label>
+                  <div className="relative">
+                    <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4.5 w-4.5 text-gray-400" />
+                    <input
+                      type={showResetConfirmPassword ? 'text' : 'password'}
+                      value={resetConfirmPassword}
+                      onChange={(e) => setResetConfirmPassword(e.target.value)}
+                      placeholder="Confirm your new password"
+                      className="w-full rounded-xl border border-gray-200 bg-gray-50 py-3 pl-11 pr-12 text-sm text-gray-900 placeholder-gray-400 transition-all duration-200 focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/30"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowResetConfirmPassword(!showResetConfirmPassword)}
+                      className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showResetConfirmPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setResetStep('verify')}
+                    className="flex-1 rounded-xl border border-gray-200 py-3 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resetLoading}
+                    className="flex-1 rounded-xl bg-gradient-to-r from-green-500 to-green-600 py-3 text-sm font-semibold text-white shadow-lg shadow-green-500/30 transition-all duration-200 hover:shadow-xl hover:shadow-green-500/40 disabled:opacity-70"
+                  >
+                    {resetLoading ? 'Updating...' : 'Change Password'}
+                  </button>
+                </div>
+              </form>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
