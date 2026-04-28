@@ -1,16 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
-import { User, Mail, Phone, MapPin, Edit2, Save, Camera, Building, LogOut } from 'lucide-react';
-import { useNavigate } from 'react-router';
+import { User, Mail, Phone, MapPin, Edit2, Save, Camera, Building, LogOut, ShieldCheck } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router';
 import { RolesVerification } from './RolesVerification';
-import { createProfileAvatarUploadUrl, getCurrentUserProfile, updateCurrentUserProfile } from '../../features/app/api';
-import { clearSession, getSessionUser, getUserInitials, persistSessionUser, SessionUser } from '../../shared/auth/session';
+import {
+  createProfileAvatarUploadUrl,
+  getCurrentUserProfile,
+  requestCurrentUserEmailChange,
+  updateCurrentUserProfile,
+  verifyCurrentUserEmailChange,
+} from '../../features/app/api';
+import {
+  clearSession,
+  getSessionUser,
+  isAdminUser,
+  persistSessionUser,
+  SessionUser,
+} from '../../shared/auth/session';
 import { requireSupabaseClient } from '../../shared/supabase/client';
+import { DefaultProfileAvatar } from './ui/default-profile-avatar';
 import { SmoothedAvatarImage } from './ui/smoothed-avatar-image';
 
 interface ProfileData {
   firstName: string;
   middleName: string;
   lastName: string;
+  age: string;
+  gender: string;
+  dateOfBirth: string;
+  civilStatus: string;
+  nationality: string;
   email: string;
   phone: string;
   address: string;
@@ -32,11 +50,18 @@ interface ProfileData {
 const AVATAR_OUTPUT_SIZE = 512;
 const AVATAR_OUTPUT_TYPE = 'image/jpeg';
 const AVATAR_OUTPUT_QUALITY = 0.92;
+const GENDER_OPTIONS = ['Male', 'Female', 'Non-binary', 'Prefer not to say'];
+const CIVIL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Separated', 'Prefer not to say'];
 
 const EMPTY_PROFILE: ProfileData = {
   firstName: '',
   middleName: '',
   lastName: '',
+  age: '',
+  gender: '',
+  dateOfBirth: '',
+  civilStatus: '',
+  nationality: '',
   email: '',
   phone: '',
   address: '',
@@ -86,10 +111,6 @@ function combineName(profile: Pick<ProfileData, 'firstName' | 'middleName' | 'la
     .join(' ');
 }
 
-function getProfileInitials(profile: Pick<ProfileData, 'firstName' | 'middleName' | 'lastName'>) {
-  return getUserInitials(combineName(profile));
-}
-
 function mapUserToProfile(user?: Partial<SessionUser> & { phone?: string; profile?: any } | null): ProfileData {
   const storedFirstName = user?.profile?.firstName;
   const storedMiddleName = user?.profile?.middleName;
@@ -107,6 +128,11 @@ function mapUserToProfile(user?: Partial<SessionUser> & { phone?: string; profil
     firstName: nameParts.firstName,
     middleName: nameParts.middleName,
     lastName: nameParts.lastName,
+    age: user?.profile?.age || '',
+    gender: user?.profile?.gender || '',
+    dateOfBirth: user?.profile?.dateOfBirth || '',
+    civilStatus: user?.profile?.civilStatus || '',
+    nationality: user?.profile?.nationality || '',
     email: user?.email || '',
     phone: user?.phone || '',
     address: user?.profile?.address || '',
@@ -313,6 +339,7 @@ function extractStructuredAddress(place: any) {
 
 export function Profile() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const sessionUser = getSessionUser();
   const addressInputRef = useRef<HTMLInputElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
@@ -325,6 +352,13 @@ export function Profile() {
   const [profileData, setProfileData] = useState<ProfileData>(mapUserToProfile(sessionUser) || EMPTY_PROFILE);
   const [editedData, setEditedData] = useState<ProfileData>(profileData);
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [emailVerificationCode, setEmailVerificationCode] = useState('');
+  const [emailVerificationBusy, setEmailVerificationBusy] = useState(false);
+  const [emailVerificationMessage, setEmailVerificationMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+  const [showEmailVerificationModal, setShowEmailVerificationModal] = useState(false);
   const previewObjectUrlRef = useRef<string | null>(null);
 
   const loadProfile = () => {
@@ -341,9 +375,15 @@ export function Profile() {
         role: user.role,
         accountType: user.accountType,
         roles: user.roles,
+        isAdmin: user.isAdmin,
+        isSuperAdmin: user.isSuperAdmin,
+        penalty: user.penalty,
+        canManageCommercialFeatures: user.canManageCommercialFeatures,
         phone: user.phone,
         profile: user.profile,
         verification: user.verification,
+        verificationMeta: user.verificationMeta,
+        emailChangePending: user.emailChangePending,
       });
       })
       .catch(() => undefined);
@@ -367,13 +407,18 @@ export function Profile() {
 
   const sellerVerified = getVerificationStatus(sessionMeta, 'seller') === 'verified';
   const laborerVerified = getVerificationStatus(sessionMeta, 'laborer') === 'verified';
+  const requestedKycRole = searchParams.get('kyc');
+  const defaultExpandedRole =
+    requestedKycRole === 'seller' || requestedKycRole === 'laborer' ? requestedKycRole : null;
+  const canAccessAdmin = isAdminUser(sessionMeta);
   const showFarmFields = sellerVerified;
   const showLaborFields = laborerVerified;
   const mapsApiKey = getMapsApiKey();
   const hasUnsavedChanges = !profilesMatch(editedData, profileData) || pendingAvatarFile !== null;
   const displayAvatarUrl = isEditing ? editedData.avatarUrl : profileData.avatarUrl;
-  const displayInitials = getProfileInitials(isEditing ? editedData : profileData);
-
+  const penaltyStatus = sessionMeta?.penalty?.status || 'good';
+  const hasAccountPenalty = penaltyStatus !== 'good';
+  const pendingEmailChange = sessionMeta?.emailChangePending || null;
   useEffect(() => {
     if (!mapsApiKey) {
       return;
@@ -444,6 +489,7 @@ export function Profile() {
 
     try {
       let avatarPath: string | undefined;
+      let successMessage = 'Profile updated successfully.';
 
       if (pendingAvatarFile) {
         const supabase = requireSupabaseClient();
@@ -463,12 +509,17 @@ export function Profile() {
 
       const { user } = await updateCurrentUserProfile({
         name: combineName(editedData),
-        email: editedData.email,
+        email: profileData.email,
         phone: editedData.phone,
         profile: {
           firstName: editedData.firstName,
           middleName: editedData.middleName,
           lastName: editedData.lastName,
+          age: editedData.age,
+          gender: editedData.gender,
+          dateOfBirth: editedData.dateOfBirth,
+          civilStatus: editedData.civilStatus,
+          nationality: editedData.nationality,
           address: editedData.address,
           streetAddress: editedData.streetAddress,
           city: editedData.city,
@@ -501,9 +552,21 @@ export function Profile() {
         },
       });
 
+      const nextEmail = editedData.email.trim().toLowerCase();
+      const currentEmail = profileData.email.trim().toLowerCase();
+
+      if (nextEmail && nextEmail !== currentEmail) {
+        const emailChangeResult = await requestCurrentUserEmailChange(nextEmail);
+        setEmailVerificationCode('');
+        setShowEmailVerificationModal(false);
+        successMessage = emailChangeResult.message;
+      }
+
       const nextProfile = mapUserToProfile(user);
       setProfileData(nextProfile);
       setEditedData(nextProfile);
+      setEmailVerificationCode('');
+      setShowEmailVerificationModal(false);
       const nextSessionUser = {
         id: user.id,
         name: user.name,
@@ -511,13 +574,19 @@ export function Profile() {
         role: user.role,
         accountType: user.accountType,
         roles: user.roles,
+        isAdmin: user.isAdmin,
+        isSuperAdmin: user.isSuperAdmin,
+        penalty: user.penalty,
+        canManageCommercialFeatures: user.canManageCommercialFeatures,
         phone: user.phone,
         profile: user.profile,
         verification: user.verification,
+        verificationMeta: user.verificationMeta,
+        emailChangePending: user.emailChangePending,
       };
       persistSessionUser(nextSessionUser);
       setSessionMeta(nextSessionUser);
-      setSaveMessage({ type: 'success', text: 'Profile updated successfully.' });
+      setSaveMessage({ type: 'success', text: successMessage });
       setIsEditing(false);
       setPendingAvatarFile(null);
       loadProfile();
@@ -536,6 +605,66 @@ export function Profile() {
     setSaveMessage(null);
     setIsEditing(false);
     setPendingAvatarFile(null);
+  };
+
+  const closeEmailVerificationModal = () => {
+    setShowEmailVerificationModal(false);
+    setEmailVerificationCode('');
+    setEmailVerificationMessage(null);
+  };
+
+  const handleVerifyEmailChange = async () => {
+    if (!pendingEmailChange?.email || !emailVerificationCode.trim()) {
+      setEmailVerificationMessage({ type: 'error', text: 'Enter the verification code sent to your new email.' });
+      return;
+    }
+
+    setEmailVerificationBusy(true);
+    setEmailVerificationMessage(null);
+
+    try {
+      const { user, message } = await verifyCurrentUserEmailChange(
+        pendingEmailChange.email,
+        emailVerificationCode.trim(),
+      );
+
+      const nextProfile = mapUserToProfile(user);
+      setProfileData(nextProfile);
+      setEditedData(nextProfile);
+      closeEmailVerificationModal();
+      setSessionMeta(user);
+      persistSessionUser(user);
+      setSaveMessage({ type: 'success', text: message });
+      loadProfile();
+    } catch (error: any) {
+      setEmailVerificationMessage({
+        type: 'error',
+        text: error?.message || 'Unable to verify the new email address right now.',
+      });
+    } finally {
+      setEmailVerificationBusy(false);
+    }
+  };
+
+  const handleResendEmailChangeCode = async () => {
+    if (!pendingEmailChange?.email) {
+      return;
+    }
+
+    setEmailVerificationBusy(true);
+    setEmailVerificationMessage(null);
+
+    try {
+      const response = await requestCurrentUserEmailChange(pendingEmailChange.email);
+      setEmailVerificationMessage({ type: 'success', text: response.message });
+    } catch (error: any) {
+      setEmailVerificationMessage({
+        type: 'error',
+        text: error?.message || 'Unable to resend the verification code right now.',
+      });
+    } finally {
+      setEmailVerificationBusy(false);
+    }
   };
 
   const handleLogout = () => {
@@ -590,6 +719,33 @@ export function Profile() {
 
   return (
     <div className="space-y-6">
+      {pendingEmailChange?.email ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="font-medium">New email is waiting for verification</p>
+              <p className="mt-1">
+                Your current login email stays as {profileData.email} until {pendingEmailChange.email} is verified.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="inline-flex w-fit items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+                Unverified
+              </span>
+                <button
+                  onClick={() => {
+                    setEmailVerificationMessage(null);
+                    setShowEmailVerificationModal(true);
+                  }}
+                  className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white hover:bg-amber-600"
+                >
+                  Verify New Email
+                </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* Profile Header */}
       <div className="bg-white rounded-lg shadow p-6">
         {saveMessage && (
@@ -601,6 +757,23 @@ export function Profile() {
             }`}
           >
             {saveMessage.text}
+          </div>
+        )}
+        {hasAccountPenalty && (
+          <div
+            className={`mb-4 rounded-lg border px-4 py-3 text-sm ${
+              penaltyStatus === 'warned'
+                ? 'border-amber-200 bg-amber-50 text-amber-800'
+                : 'border-red-200 bg-red-50 text-red-700'
+            }`}
+          >
+            <p className="font-medium">
+              Account status: {penaltyStatus.charAt(0).toUpperCase() + penaltyStatus.slice(1)}
+            </p>
+            <p className="mt-1">{sessionMeta?.penalty?.reason || 'An admin placed a penalty on this account.'}</p>
+            {sessionMeta?.penalty?.expiresAt ? (
+              <p className="mt-1">Expires: {new Date(sessionMeta.penalty.expiresAt).toLocaleString()}</p>
+            ) : null}
           </div>
         )}
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
@@ -616,9 +789,7 @@ export function Profile() {
                     decoding="async"
                   />
                 ) : (
-                  <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-green-500 to-green-600 text-white">
-                    <span className="text-3xl font-semibold">{displayInitials}</span>
-                  </div>
+                  <DefaultProfileAvatar showCameraBadge={isEditing} />
                 )}
               </div>
               <input
@@ -651,6 +822,15 @@ export function Profile() {
             </div>
           </div>
           <div className="mt-4 md:mt-0 flex items-center gap-3">
+            {canAccessAdmin ? (
+              <button
+                onClick={() => navigate('/admin')}
+                className="px-6 py-2 border border-green-200 text-green-700 rounded-lg hover:bg-green-50 flex items-center space-x-2"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                <span>Back to Admin</span>
+              </button>
+            ) : null}
             <button
               onClick={handleLogout}
               className="px-6 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 flex items-center space-x-2"
@@ -730,6 +910,89 @@ export function Profile() {
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Age</label>
+            {isEditing ? (
+              <input
+                type="text"
+                inputMode="numeric"
+                value={editedData.age}
+                onChange={(e) => setEditedData({ ...editedData, age: e.target.value.replace(/\D/g, '').slice(0, 3) })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            ) : (
+              <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.age, 'Not set')}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Gender</label>
+            {isEditing ? (
+              <select
+                value={editedData.gender}
+                onChange={(e) => setEditedData({ ...editedData, gender: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="">Select gender</option>
+                {GENDER_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.gender)}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Date of Birth</label>
+            {isEditing ? (
+              <input
+                type="date"
+                value={editedData.dateOfBirth}
+                onChange={(e) => setEditedData({ ...editedData, dateOfBirth: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            ) : (
+              <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.dateOfBirth)}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Civil Status</label>
+            {isEditing ? (
+              <select
+                value={editedData.civilStatus}
+                onChange={(e) => setEditedData({ ...editedData, civilStatus: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="">Select civil status</option>
+                {CIVIL_STATUS_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.civilStatus)}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Nationality</label>
+            {isEditing ? (
+              <input
+                type="text"
+                value={editedData.nationality}
+                onChange={(e) => setEditedData({ ...editedData, nationality: e.target.value })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            ) : (
+              <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.nationality)}</p>
+            )}
+          </div>
+
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               <Mail className="w-4 h-4 inline mr-2" />
               Email Address
@@ -742,7 +1005,22 @@ export function Profile() {
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
               />
             ) : (
-              <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.email)}</p>
+              <div className="space-y-3">
+                <div className="rounded-lg bg-gray-50 px-4 py-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <span>{getDisplayValue(pendingEmailChange?.email || profileData.email)}</span>
+                    {pendingEmailChange?.email ? (
+                      <span className="inline-flex w-fit items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700">
+                        Unverified
+                      </span>
+                    ) : (
+                      <span className="inline-flex w-fit items-center rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
+                        Verified
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
             )}
           </div>
 
@@ -975,12 +1253,78 @@ export function Profile() {
       {/* Account Roles & Verification */}
       <RolesVerification
         user={sessionMeta}
+        defaultExpandedRole={defaultExpandedRole}
         onUserUpdated={(user) => {
           setSessionMeta(user);
           persistSessionUser(user);
           loadProfile();
         }}
       />
+
+      {showEmailVerificationModal && pendingEmailChange?.email ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={closeEmailVerificationModal}
+          />
+          <div className="relative z-10 w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Verify New Email</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Enter the 6-digit code sent to {pendingEmailChange.email}.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {emailVerificationMessage ? (
+                <div
+                  className={`rounded-lg border px-4 py-3 text-sm ${
+                    emailVerificationMessage.type === 'success'
+                      ? 'border-green-200 bg-green-50 text-green-700'
+                      : 'border-red-200 bg-red-50 text-red-700'
+                  }`}
+                >
+                  {emailVerificationMessage.text}
+                </div>
+              ) : null}
+
+              <input
+                type="text"
+                inputMode="numeric"
+                value={emailVerificationCode}
+                onChange={(event) => setEmailVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="6-digit code"
+                className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-400"
+              />
+
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={handleResendEmailChangeCode}
+                  disabled={emailVerificationBusy}
+                  className="text-sm font-medium text-amber-700 hover:text-amber-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Resend Code
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={closeEmailVerificationModal}
+                    className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleVerifyEmailChange}
+                    disabled={emailVerificationBusy || emailVerificationCode.trim().length < 6}
+                    className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {emailVerificationBusy ? 'Verifying...' : 'Submit Code'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

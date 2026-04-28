@@ -7,13 +7,19 @@ import {
   resendRegistrationCode,
   verifyRegistrationCode,
 } from '../../features/auth/api';
-import { persistSession } from '../../shared/auth/session';
+import {
+  getAuthenticatedHomeRoute,
+  getLogoHomeRoute,
+  getSessionUser,
+  persistSession,
+} from '../../shared/auth/session';
 
 type VerificationStep = 'form' | 'verify';
 
 export function RegisterPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const sessionUser = getSessionUser();
   const [step, setStep] = useState<VerificationStep>('form');
   const [verificationEmail, setVerificationEmail] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
@@ -123,7 +129,7 @@ export function RegisterPage() {
     try {
       const response = await verifyRegistrationCode(verificationEmail, verificationCode);
       persistSession(response.token, response.user);
-      navigate(searchParams.get('redirect') || '/app');
+      navigate(searchParams.get('redirect') || getAuthenticatedHomeRoute(response.user));
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Unable to verify your email right now.',
@@ -163,7 +169,7 @@ export function RegisterPage() {
           className="absolute inset-0 w-full h-full object-cover"
         />
         <div className="relative z-20 flex flex-col justify-between p-12 w-full">
-          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate('/')}>
+          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate(getLogoHomeRoute(sessionUser))}>
             <div className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center border border-white/30">
               <Sprout className="w-6 h-6 text-white" />
             </div>
@@ -206,7 +212,7 @@ export function RegisterPage() {
 
       <div className="w-full lg:w-1/2 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">
-          <div className="lg:hidden flex items-center justify-center space-x-3 mb-8 cursor-pointer" onClick={() => navigate('/')}>
+          <div className="lg:hidden flex items-center justify-center space-x-3 mb-8 cursor-pointer" onClick={() => navigate(getLogoHomeRoute(sessionUser))}>
             <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/30">
               <Sprout className="w-6 h-6 text-white" />
             </div>

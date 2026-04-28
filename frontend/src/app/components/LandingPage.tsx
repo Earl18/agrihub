@@ -2,7 +2,14 @@ import { Sprout, ShieldCheck, Leaf, Truck, Search, CreditCard, Package, ArrowRig
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { getSessionUser, getUserInitials, isAuthenticated } from '../../shared/auth/session';
+import { SmoothedAvatarImage } from './ui/smoothed-avatar-image';
+import {
+  getAuthenticatedHomeRoute,
+  getLogoHomeRoute,
+  getSessionUser,
+  getUserInitials,
+  isAuthenticated,
+} from '../../shared/auth/session';
 import { Notifications } from './Notifications';
 import {
   AppNotification,
@@ -16,6 +23,13 @@ export function LandingPage() {
   const loggedIn = isAuthenticated();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
+
+  useEffect(() => {
+    if (loggedIn) {
+      navigate(getAuthenticatedHomeRoute(sessionUser), { replace: true });
+      return;
+    }
+  }, [loggedIn, navigate, sessionUser]);
 
   useEffect(() => {
     setNotifications(getStoredNotifications());
@@ -52,13 +66,29 @@ export function LandingPage() {
     saveNotifications([]);
   };
 
+  const handleBecomeSeller = () => {
+    if (!loggedIn || !sessionUser) {
+      navigate('/register');
+      return;
+    }
+
+    const sellerStatus = sessionUser.verification?.seller || 'unverified';
+
+    if (sellerStatus === 'verified') {
+      navigate('/app');
+      return;
+    }
+
+    navigate('/app?tab=profile&kyc=seller');
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-green-50 flex flex-col">
       {/* Navbar */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-30 backdrop-blur-lg bg-white/95">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-[auto_1fr_auto] items-center h-16 gap-6">
-            <div className="flex items-center space-x-3">
+            <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate(getLogoHomeRoute(sessionUser))}>
               <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/30">
                 <Sprout className="w-6 h-6 text-white" />
               </div>
@@ -93,10 +123,18 @@ export function LandingPage() {
                     onClick={() => navigate('/app?tab=profile')}
                     className="hidden md:flex items-center hover:bg-gray-100 rounded-xl px-3 py-2 transition-all duration-200"
                   >
-                    <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-green-600 rounded-full flex items-center justify-center shadow-md shadow-green-500/20">
-                      <span className="text-sm font-semibold text-white">
-                        {getUserInitials(sessionUser?.name)}
-                      </span>
+                    <div className="w-8 h-8 overflow-hidden rounded-full bg-white flex items-center justify-center ring-1 ring-gray-200 shadow-sm">
+                      {sessionUser?.profile?.avatarUrl ? (
+                        <SmoothedAvatarImage
+                          src={sessionUser.profile.avatarUrl}
+                          alt={sessionUser.name || 'Profile'}
+                          className="block h-full w-full object-cover object-center"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-green-500 to-green-600 text-xs font-semibold text-white">
+                          {getUserInitials(sessionUser?.name)}
+                        </div>
+                      )}
                     </div>
                   </button>
                 </>
@@ -148,7 +186,7 @@ export function LandingPage() {
                 <span>Start Buying</span>
               </button>
               <button
-                onClick={() => navigate('/register')}
+                onClick={handleBecomeSeller}
                 className="flex items-center space-x-2 px-6 py-3 text-green-600 border border-green-200 rounded-xl hover:bg-green-50 hover:shadow-md transition-all duration-200"
               >
                 <Sprout className="w-4 h-4" />

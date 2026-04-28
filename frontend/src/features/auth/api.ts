@@ -8,10 +8,31 @@ type AuthUser = {
   role?: string;
   accountType?: string;
   roles?: string[];
+  isAdmin?: boolean;
+  isSuperAdmin?: boolean;
   verification?: {
     seller?: 'unverified' | 'pending' | 'verified';
     laborer?: 'unverified' | 'pending' | 'verified';
   };
+  verificationMeta?: {
+    seller?: {
+      reviewReason?: string;
+      rejectedAt?: string | null;
+    };
+    laborer?: {
+      reviewReason?: string;
+      rejectedAt?: string | null;
+    };
+  };
+  penalty?: {
+    status?: 'good' | 'warned' | 'restricted' | 'suspended';
+    reason?: string;
+    notes?: string;
+    penalizedAt?: string | null;
+    expiresAt?: string | null;
+    penalizedBy?: string;
+  };
+  canManageCommercialFeatures?: boolean;
 };
 
 type AuthResponse = {

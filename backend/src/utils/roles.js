@@ -16,6 +16,44 @@ const ROLE_TO_LEGACY_ACCOUNT_TYPE = {
   admin: 'admin',
 };
 
+const SUPER_ADMIN_EMAILS = new Set([
+  'admin@agrihub.com',
+  'earljustinesierra@gmail.com',
+]);
+
+export function isSuperAdminEmail(email) {
+  return SUPER_ADMIN_EMAILS.has(String(email || '').trim().toLowerCase());
+}
+
+export function ensurePrivilegedAccess(user) {
+  if (!user || !isSuperAdminEmail(user.email)) {
+    return false;
+  }
+
+  let changed = false;
+  const nextRoles = new Set(Array.isArray(user.roles) ? user.roles : []);
+
+  nextRoles.add('buyer');
+  nextRoles.add('admin');
+
+  if (user.role !== 'admin') {
+    user.role = 'admin';
+    changed = true;
+  }
+
+  if (user.accountType !== 'admin') {
+    user.accountType = 'admin';
+    changed = true;
+  }
+
+  if (nextRoles.size !== (Array.isArray(user.roles) ? user.roles.length : 0)) {
+    user.roles = Array.from(nextRoles);
+    changed = true;
+  }
+
+  return changed;
+}
+
 export function getUserRoles(user) {
   const roleSet = new Set(Array.isArray(user?.roles) ? user.roles : []);
 
@@ -38,6 +76,10 @@ export function hasRole(user, role) {
   return getUserRoles(user).includes(role);
 }
 
+export function isSuperAdmin(user) {
+  return isSuperAdminEmail(user?.email);
+}
+
 export function roleQuery(role) {
   const legacyAccountType = ROLE_TO_LEGACY_ACCOUNT_TYPE[role];
 
@@ -55,4 +97,33 @@ export function getVerificationState(user) {
     seller: user?.verification?.seller?.status || (hasRole(user, 'seller') ? 'verified' : 'unverified'),
     laborer: user?.verification?.laborer?.status || (hasRole(user, 'laborer') ? 'verified' : 'unverified'),
   };
+}
+
+export function getPenaltyState(user) {
+  return {
+    status: user?.penalty?.status || 'good',
+    reason: user?.penalty?.reason || '',
+    notes: user?.penalty?.notes || '',
+    penalizedAt: user?.penalty?.penalizedAt || null,
+    expiresAt: user?.penalty?.expiresAt || null,
+    penalizedBy: user?.penalty?.penalizedBy || '',
+  };
+}
+
+export function hasActivePenalty(user, ...statuses) {
+  const penalty = getPenaltyState(user);
+
+  if (!statuses.includes(penalty.status)) {
+    return false;
+  }
+
+  if (!penalty.expiresAt) {
+    return true;
+  }
+
+  return new Date(penalty.expiresAt).getTime() > Date.now();
+}
+
+export function canManageCommercialFeatures(user) {
+  return !hasActivePenalty(user, 'restricted', 'suspended');
 }

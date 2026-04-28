@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Truck, Wrench, Droplet, Scissors, Calendar, Clock, MapPin, ArrowLeft, Eye, XCircle, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 import { getServicesData } from '../../features/app/api';
+import { SessionUser } from '../../shared/auth/session';
+import { addStoredActivity } from '../../shared/activity/store';
 
 interface ServicesBookingProps {
   onBookService: (service: any) => void;
+  currentUser: SessionUser | null;
 }
 
 interface Booking {
@@ -21,12 +24,13 @@ interface Booking {
   bookingRef: string;
 }
 
-export function ServicesBooking({ onBookService }: ServicesBookingProps) {
+export function ServicesBooking({ onBookService, currentUser }: ServicesBookingProps) {
   const [selectedService, setSelectedService] = useState<string | null>(null);
   const [viewingBooking, setViewingBooking] = useState<Booking | null>(null);
   const [cancelConfirmId, setCancelConfirmId] = useState<number | null>(null);
   const [liveProviders, setLiveProviders] = useState<any[]>([]);
   const [liveBookings, setLiveBookings] = useState<Booking[]>([]);
+  const isCommerciallyRestricted = currentUser?.canManageCommercialFeatures === false;
 
   const serviceCategories = [
     { id: 'equipment', name: 'Equipment Rental', icon: Truck, color: 'bg-blue-500' },
@@ -45,7 +49,15 @@ export function ServicesBooking({ onBookService }: ServicesBookingProps) {
   }, []);
 
   const handleCancelBooking = (id: number) => {
-        setLiveBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'cancelled' as const } : b));
+    const cancelledBooking = liveBookings.find((booking) => booking.id === id);
+
+    setLiveBookings(prev => prev.map(b => b.id === id ? { ...b, status: 'cancelled' as const } : b));
+    if (currentUser?.id && cancelledBooking) {
+      addStoredActivity(currentUser.id, {
+        description: `Cancelled service booking for ${cancelledBooking.service}`,
+        status: 'confirmed',
+      });
+    }
     setCancelConfirmId(null);
   };
 
@@ -145,6 +157,11 @@ export function ServicesBooking({ onBookService }: ServicesBookingProps) {
   // ==================== MAIN VIEW ====================
   return (
     <div className="space-y-6">
+      {isCommerciallyRestricted && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+          Your account is currently restricted. Service booking actions are limited until an admin clears the penalty.
+        </div>
+      )}
       {/* Cancel Confirmation Modal */}
       {cancelConfirmId !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -310,11 +327,11 @@ export function ServicesBooking({ onBookService }: ServicesBookingProps) {
                 <button
                   onClick={() => onBookService(service)}
                   className={`w-full py-2 rounded-lg transition-all active:scale-[0.98] ${
-                    service.available
+                    service.available && !isCommerciallyRestricted
                       ? 'bg-green-600 text-white hover:bg-green-700'
                       : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   }`}
-                  disabled={!service.available}
+                  disabled={!service.available || isCommerciallyRestricted}
                 >
                   {service.available ? 'Book Now' : 'Unavailable'}
                 </button>

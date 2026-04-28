@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { TrendingUp, Users, Truck, DollarSign, AlertCircle } from 'lucide-react';
-import { getDashboardData } from '../../features/app/api';
+import { TrendingUp, Users, Truck, DollarSign, AlertCircle, ShoppingBag, Sprout } from 'lucide-react';
+import { getDashboardData, getLaborData, getMarketplaceData, getServicesData } from '../../features/app/api';
 import { getStoredActivities, getActivitiesUpdatedEventName } from '../../shared/activity/store';
-import { getSessionUser } from '../../shared/auth/session';
+import { getSessionUser, isAuthenticated } from '../../shared/auth/session';
 
 const icons: Record<string, any> = {
   DollarSign,
@@ -19,11 +19,41 @@ const toneClasses: Record<string, string> = {
   laborer: 'from-teal-500 to-cyan-600',
 };
 
+const guestOverviewCards = [
+  {
+    key: 'marketplace',
+    label: 'Marketplace Items',
+    icon: ShoppingBag,
+    tone: 'from-green-500 to-emerald-600',
+    accent: 'Explore fresh products from verified listings.',
+  },
+  {
+    key: 'labor',
+    label: 'Available Workers',
+    icon: Users,
+    tone: 'from-violet-500 to-fuchsia-600',
+    accent: 'Find labor support ready for farm jobs.',
+  },
+  {
+    key: 'services',
+    label: 'Available Services',
+    icon: Truck,
+    tone: 'from-orange-500 to-orange-600',
+    accent: 'Browse active farm services you can book now.',
+  },
+];
+
 export function Dashboard() {
   const [stats, setStats] = useState<any[]>([]);
   const [recentActivities, setRecentActivities] = useState<any[]>([]);
   const [upcomingTasks, setUpcomingTasks] = useState<any[]>([]);
+  const [guestOverview, setGuestOverview] = useState({
+    marketplace: 0,
+    labor: 0,
+    services: 0,
+  });
   const [now, setNow] = useState(Date.now());
+  const loggedIn = isAuthenticated();
 
   const getStatCardSpan = () => {
     if (stats.length === 1) {
@@ -54,6 +84,41 @@ export function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (!loggedIn) {
+      Promise.allSettled([getMarketplaceData(), getLaborData(), getServicesData()])
+        .then(([marketplaceResult, laborResult, servicesResult]) => {
+          const marketplacePayload =
+            marketplaceResult.status === 'fulfilled' ? marketplaceResult.value : null;
+          const laborPayload = laborResult.status === 'fulfilled' ? laborResult.value : null;
+          const servicesPayload =
+            servicesResult.status === 'fulfilled' ? servicesResult.value : null;
+          const serviceProviders = Array.isArray(servicesPayload?.providers)
+            ? servicesPayload.providers
+            : [];
+          const availableServices = serviceProviders.flatMap((provider: any) =>
+            Array.isArray(provider?.services)
+              ? provider.services.filter((service: any) => Boolean(service?.available))
+              : [],
+          );
+
+          setGuestOverview({
+            marketplace: Array.isArray(marketplacePayload?.products)
+              ? marketplacePayload.products.length
+              : 0,
+            labor: Array.isArray(laborPayload?.availableWorkers)
+              ? laborPayload.availableWorkers.length
+              : 0,
+            services: availableServices.length,
+          });
+        })
+        .catch(() => undefined);
+
+      setStats([]);
+      setRecentActivities([]);
+      setUpcomingTasks([]);
+      return;
+    }
+
     const syncDashboard = () => {
       const sessionUser = getSessionUser();
 
@@ -89,7 +154,7 @@ export function Dashboard() {
     return () => {
       window.removeEventListener(getActivitiesUpdatedEventName(), syncDashboard);
     };
-  }, []);
+  }, [loggedIn]);
 
   const formatRelativeTime = (value: string) => {
     const timestamp = new Date(value).getTime();
@@ -139,31 +204,71 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-12">
-        {stats.map((stat, index) => (
-          <div
-            key={index}
-            className={`group rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-all duration-300 hover:shadow-xl ${statCardSpanClass}`}
-          >
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <p className="text-sm text-gray-500 mb-2">{stat.label}</p>
-                <p className="text-3xl font-bold text-gray-900 mb-1">{stat.value}</p>
-                <p className="text-sm text-green-600 font-medium">{stat.change}</p>
+      {!loggedIn ? (
+        <>
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+            {guestOverviewCards.map((card) => (
+              <div
+                key={card.key}
+                className="group rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-all duration-300 hover:shadow-xl"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <p className="mb-2 text-sm text-gray-500">{card.label}</p>
+                    <p className="mb-1 text-3xl font-bold text-gray-900">
+                      {guestOverview[card.key as keyof typeof guestOverview]}
+                    </p>
+                    <p className="text-sm text-gray-500">{card.accent}</p>
+                  </div>
+                  <div className={`rounded-xl bg-gradient-to-br ${card.tone} p-3 shadow-lg transition-transform duration-300 group-hover:scale-110`}>
+                    <card.icon className="h-6 w-6 text-white" />
+                  </div>
+                </div>
               </div>
-              {(() => {
-                const Icon = icons[stat.icon] || DollarSign;
-                const gradientClasses = toneClasses[stat.tone] || toneClasses.purchases;
-                return (
-              <div className={`bg-gradient-to-br ${gradientClasses} p-3 rounded-xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
-                    <Icon className="w-6 h-6 text-white" />
+            ))}
+          </div>
+
+          <div className="rounded-2xl border border-green-100 bg-white p-8 shadow-sm">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-green-50 text-green-600">
+                <Sprout className="h-6 w-6" />
               </div>
-                );
-              })()}
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Start exploring AgriHub</h3>
+                <p className="mt-2 max-w-2xl text-sm text-gray-500">
+                  Sign in or create an account to track your activity, manage bookings, and unlock seller or laborer tools. For now, this dashboard shows the live totals currently available across the platform.
+                </p>
+              </div>
             </div>
           </div>
-        ))}
-      </div>
+        </>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-12">
+            {stats.map((stat, index) => (
+              <div
+                key={index}
+                className={`group rounded-2xl border border-gray-100 bg-white p-6 shadow-sm transition-all duration-300 hover:shadow-xl ${statCardSpanClass}`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <p className="text-sm text-gray-500 mb-2">{stat.label}</p>
+                    <p className="text-3xl font-bold text-gray-900 mb-1">{stat.value}</p>
+                    <p className="text-sm text-green-600 font-medium">{stat.change}</p>
+                  </div>
+                  {(() => {
+                    const Icon = icons[stat.icon] || DollarSign;
+                    const gradientClasses = toneClasses[stat.tone] || toneClasses.purchases;
+                    return (
+                  <div className={`bg-gradient-to-br ${gradientClasses} p-3 rounded-xl shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                        <Icon className="w-6 h-6 text-white" />
+                  </div>
+                    );
+                  })()}
+                </div>
+              </div>
+            ))}
+          </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Activities */}
@@ -226,6 +331,8 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+        </>
+      )}
 
     </div>
   );

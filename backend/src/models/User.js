@@ -28,6 +28,7 @@ const marketplaceListingSchema = new mongoose.Schema(
 const laborBookingSchema = new mongoose.Schema(
   {
     worker: String,
+    workerId: String,
     type: String,
     date: String,
     time: String,
@@ -37,6 +38,8 @@ const laborBookingSchema = new mongoose.Schema(
     status: String,
     cost: Number,
     rating: Number,
+    bookedByUserId: String,
+    bookedByName: String,
   },
   { _id: false },
 );
@@ -116,6 +119,15 @@ const roleVerificationSchema = new mongoose.Schema(
     verifiedAt: {
       type: Date,
       default: null,
+    },
+    rejectedAt: {
+      type: Date,
+      default: null,
+    },
+    reviewReason: {
+      type: String,
+      default: '',
+      trim: true,
     },
     documents: {
       type: [
@@ -257,6 +269,80 @@ const emailVerificationSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    pendingEmail: {
+      type: String,
+      default: '',
+      lowercase: true,
+      trim: true,
+    },
+  },
+  { _id: false },
+);
+
+const penaltySchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ['good', 'warned', 'restricted', 'suspended'],
+      default: 'good',
+    },
+    reason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    notes: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    penalizedAt: {
+      type: Date,
+      default: null,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    penalizedBy: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+  },
+  { _id: false },
+);
+
+const penaltyHistorySchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ['good', 'warned', 'restricted', 'suspended'],
+      required: true,
+    },
+    reason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    notes: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    penalizedAt: {
+      type: Date,
+      default: Date.now,
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    penalizedBy: {
+      type: String,
+      default: '',
+      trim: true,
+    },
   },
   { _id: false },
 );
@@ -329,6 +415,14 @@ const userSchema = new mongoose.Schema(
       type: emailVerificationSchema,
       default: () => ({}),
     },
+    penalty: {
+      type: penaltySchema,
+      default: () => ({}),
+    },
+    penaltyHistory: {
+      type: [penaltyHistorySchema],
+      default: [],
+    },
     profile: {
       firstName: {
         type: String,
@@ -339,6 +433,34 @@ const userSchema = new mongoose.Schema(
         default: '',
       },
       lastName: {
+        type: String,
+        default: '',
+      },
+      age: {
+        type: String,
+        default: '',
+      },
+      gender: {
+        type: String,
+        default: '',
+      },
+      dateOfBirth: {
+        type: String,
+        default: '',
+      },
+      civilStatus: {
+        type: String,
+        default: '',
+      },
+      nationality: {
+        type: String,
+        default: '',
+      },
+      emergencyContactName: {
+        type: String,
+        default: '',
+      },
+      emergencyContactPhone: {
         type: String,
         default: '',
       },
@@ -408,6 +530,16 @@ const userSchema = new mongoose.Schema(
     marketplaceListings: {
       type: [marketplaceListingSchema],
       default: [],
+    },
+    laborBookings: {
+      activeBookings: {
+        type: [laborBookingSchema],
+        default: [],
+      },
+      bookingHistory: {
+        type: [laborBookingSchema],
+        default: [],
+      },
     },
     laborProfile: {
       workerType: {

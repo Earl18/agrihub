@@ -6,15 +6,18 @@ import { Marketplace } from './Marketplace';
 import { LaborManagement } from './LaborManagement';
 import { ServicesBooking } from './ServicesBooking';
 import { Profile } from './Profile';
+import { createLaborBooking } from '../../features/app/api';
 import { Notifications } from './Notifications';
 import { Cart, CartItem } from './Cart';
 import { Receipt, ReceiptData } from './Receipt';
 import { BookingModal } from './BookingModal';
 import { SmoothedAvatarImage } from './ui/smoothed-avatar-image';
 import {
+  getAuthenticatedHomeRoute,
+  getLogoHomeRoute,
   getSessionUpdatedEventName,
-  getSessionUser,
   getUserInitials,
+  getSessionUser,
   isAuthenticated,
 } from '../../shared/auth/session';
 import {
@@ -26,10 +29,22 @@ import { addStoredActivity } from '../../shared/activity/store';
 
 type TabType = 'dashboard' | 'marketplace' | 'labor' | 'services' | 'profile';
 
+const validTabs: TabType[] = ['dashboard', 'marketplace', 'labor', 'services', 'profile'];
+
+function getTabFromSearchParams(searchParams: URLSearchParams): TabType {
+  const requestedTab = searchParams.get('tab');
+
+  if (requestedTab && validTabs.includes(requestedTab as TabType)) {
+    return requestedTab as TabType;
+  }
+
+  return 'dashboard';
+}
+
 export function DashboardApp() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const [activeTab, setActiveTab] = useState<TabType>(() => getTabFromSearchParams(searchParams));
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -44,6 +59,7 @@ export function DashboardApp() {
   const [bookingItem, setBookingItem] = useState<any>(null);
   const [sessionUser, setSessionUser] = useState(getSessionUser());
   const loggedIn = isAuthenticated();
+  const canUseCommercialFeatures = sessionUser?.canManageCommercialFeatures !== false;
 
   const tabs = [
     { id: 'dashboard' as TabType, name: 'Dashboard', icon: LayoutDashboard },
@@ -53,15 +69,12 @@ export function DashboardApp() {
   ];
 
   useEffect(() => {
-    const requestedTab = searchParams.get('tab') as TabType | null;
+    const nextTab = getTabFromSearchParams(searchParams);
 
-    if (
-      requestedTab &&
-      ['dashboard', 'marketplace', 'labor', 'services', 'profile'].includes(requestedTab)
-    ) {
-      setActiveTab(requestedTab);
+    if (nextTab !== activeTab) {
+      setActiveTab(nextTab);
     }
-  }, [searchParams]);
+  }, [activeTab, searchParams]);
 
   useEffect(() => {
     setNotifications(getStoredNotifications());
@@ -96,6 +109,11 @@ export function DashboardApp() {
 
   const requireLogin = (tab: 'marketplace' | 'labor' | 'services') => {
     if (loggedIn) {
+      if (!canUseCommercialFeatures) {
+        updateActiveTab('profile');
+        return false;
+      }
+
       return true;
     }
 
@@ -212,33 +230,54 @@ export function DashboardApp() {
     setBookingModalOpen(true);
   };
 
-  const handleConfirmBooking = (bookingData: any) => {
+  const handleConfirmBooking = async (bookingData: any) => {
     if (!requireLogin(bookingType === 'labor' ? 'labor' : 'services')) {
       return;
     }
 
-    const rate = bookingItem.rate || bookingItem.price;
-    const durationHours = parseInt(bookingData.duration) || 8;
-    const total = rate * durationHours;
-    const tax = total * 0.08;
-    const totalWithTax = total + tax;
-    const receipt: ReceiptData = {
-      id: `${bookingType === 'labor' ? 'LAB' : 'SRV'}-${Date.now()}`,
-      type: bookingType === 'labor' ? 'labor' : 'service',
-      date: bookingData.date, time: bookingData.time,
-      items: [{ name: bookingData.itemName, quantity: durationHours, unit: 'hours', price: rate, total }],
-      subtotal: total, tax, total: totalWithTax, paymentMethod: 'Credit Card', provider: bookingData.provider, buyer: sessionUser?.name || 'Authenticated User',
-    };
-    setCurrentReceipt(receipt);
-    setBookingModalOpen(false);
-    setReceiptOpen(true);
-    addNotification({ type: 'success', title: `${bookingType === 'labor' ? 'Worker' : 'Service'} Booked`, message: `${bookingData.itemName} booked for ${bookingData.date} at ${bookingData.time}` });
-    logActivity(
-      bookingType === 'labor'
-        ? `Booked worker ${bookingData.itemName} for ${bookingData.date}`
-        : `Booked service ${bookingData.itemName} for ${bookingData.date}`,
-      'completed',
-    );
+    try {
+      if (bookingType === 'labor') {
+        await createLaborBooking({
+          workerId: bookingItem.id,
+          date: bookingData.date,
+          time: bookingData.time,
+          duration: bookingData.duration,
+          location: bookingData.location,
+        });
+      }
+
+      const rate = bookingItem.rate || bookingItem.price;
+      const durationHours = parseInt(bookingData.duration) || 8;
+      const total = rate * durationHours;
+      const tax = total * 0.08;
+      const totalWithTax = total + tax;
+      const receipt: ReceiptData = {
+        id: `${bookingType === 'labor' ? 'LAB' : 'SRV'}-${Date.now()}`,
+        type: bookingType === 'labor' ? 'labor' : 'service',
+        date: bookingData.date, time: bookingData.time,
+        items: [{ name: bookingData.itemName, quantity: durationHours, unit: 'hours', price: rate, total }],
+        subtotal: total, tax, total: totalWithTax, paymentMethod: 'Credit Card', provider: bookingData.provider, buyer: sessionUser?.name || 'Authenticated User',
+      };
+      setCurrentReceipt(receipt);
+      setBookingModalOpen(false);
+      setReceiptOpen(true);
+      if (bookingType === 'labor') {
+        window.dispatchEvent(new Event('agrihub:labor-bookings-updated'));
+      }
+      addNotification({ type: 'success', title: `${bookingType === 'labor' ? 'Worker' : 'Service'} Booked`, message: `${bookingData.itemName} booked for ${bookingData.date} at ${bookingData.time}` });
+      logActivity(
+        bookingType === 'labor'
+          ? `Booked worker ${bookingData.itemName} for ${bookingData.date}`
+          : `Booked service ${bookingData.itemName} for ${bookingData.date}`,
+        'completed',
+      );
+    } catch (error) {
+      addNotification({
+        type: 'warning',
+        title: bookingType === 'labor' ? 'Booking Failed' : 'Service Booking Failed',
+        message: error instanceof Error ? error.message : 'Unable to complete the booking right now.',
+      });
+    }
   };
 
   const renderContent = () => {
@@ -246,7 +285,7 @@ export function DashboardApp() {
       case 'dashboard': return <Dashboard />;
       case 'marketplace': return <Marketplace onAddToCart={handleAddToCart} currentUser={sessionUser} />;
       case 'labor': return <LaborManagement onBookWorker={handleBookWorker} currentUser={sessionUser} />;
-      case 'services': return <ServicesBooking onBookService={handleBookService} />;
+      case 'services': return <ServicesBooking onBookService={handleBookService} currentUser={sessionUser} />;
       case 'profile': return <Profile />;
       default: return <Dashboard />;
     }
@@ -266,7 +305,7 @@ export function DashboardApp() {
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-30 backdrop-blur-lg bg-white/95">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate('/')}>
+            <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate(getLogoHomeRoute(sessionUser))}>
               <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/30">
                 <Sprout className="w-6 h-6 text-white" />
               </div>
@@ -321,7 +360,9 @@ export function DashboardApp() {
                           className="block h-full w-full object-cover object-center"
                         />
                       ) : (
-                        <span className="text-sm font-semibold text-green-700">{getUserInitials(sessionUser?.name)}</span>
+                        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-green-500 to-green-600 text-xs font-semibold text-white">
+                          {getUserInitials(sessionUser?.name)}
+                        </div>
                       )}
                     </div>
                   </button>

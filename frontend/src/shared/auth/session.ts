@@ -6,11 +6,18 @@ export type SessionUser = {
   role?: string;
   accountType?: string;
   roles?: string[];
+  isAdmin?: boolean;
+  isSuperAdmin?: boolean;
   phone?: string;
   profile?: {
     firstName?: string;
     middleName?: string;
     lastName?: string;
+    age?: string;
+    gender?: string;
+    dateOfBirth?: string;
+    civilStatus?: string;
+    nationality?: string;
     address?: string;
     streetAddress?: string;
     city?: string;
@@ -32,11 +39,47 @@ export type SessionUser = {
     seller?: 'unverified' | 'pending' | 'verified';
     laborer?: 'unverified' | 'pending' | 'verified';
   };
+  verificationMeta?: {
+    seller?: {
+      reviewReason?: string;
+      rejectedAt?: string | null;
+    };
+    laborer?: {
+      reviewReason?: string;
+      rejectedAt?: string | null;
+    };
+  };
+  emailChangePending?: {
+    email?: string;
+    requestedAt?: string | null;
+  } | null;
+  penalty?: {
+    status?: 'good' | 'warned' | 'restricted' | 'suspended';
+    reason?: string;
+    notes?: string;
+    penalizedAt?: string | null;
+    expiresAt?: string | null;
+    penalizedBy?: string;
+  };
+  canManageCommercialFeatures?: boolean;
 };
 
 const TOKEN_KEY = 'agrihub_token';
 const USER_KEY = 'agrihub_user';
 const SESSION_UPDATED_EVENT = 'agrihub:session-updated';
+const SUPER_ADMIN_EMAILS = new Set(['admin@agrihub.com', 'earljustinesierra@gmail.com']);
+
+function normalizeSessionUser(user: SessionUser): SessionUser {
+  const normalizedEmail = String(user?.email || '').trim().toLowerCase();
+  const isSuperAdmin = SUPER_ADMIN_EMAILS.has(normalizedEmail);
+  const isAdmin = Boolean(user?.isAdmin || user?.roles?.includes('admin') || isSuperAdmin);
+
+  return {
+    ...user,
+    isAdmin,
+    isSuperAdmin,
+  };
+}
 
 function notifySessionUpdated() {
   if (typeof window === 'undefined') {
@@ -66,7 +109,7 @@ export function getSessionUser(): SessionUser | null {
   }
 
   try {
-    return JSON.parse(rawUser) as SessionUser;
+    return normalizeSessionUser(JSON.parse(rawUser) as SessionUser);
   } catch {
     return null;
   }
@@ -78,7 +121,7 @@ export function persistSession(token: string, user: SessionUser) {
   }
 
   localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  localStorage.setItem(USER_KEY, JSON.stringify(normalizeSessionUser(user)));
   notifySessionUpdated();
 }
 
@@ -87,7 +130,7 @@ export function persistSessionUser(user: SessionUser) {
     return;
   }
 
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
+  localStorage.setItem(USER_KEY, JSON.stringify(normalizeSessionUser(user)));
   notifySessionUpdated();
 }
 
@@ -125,4 +168,28 @@ export function getUserInitials(name?: string | null) {
   }
 
   return parts.map((part) => part[0]?.toUpperCase() ?? '').join('');
+}
+
+export function isAdminUser(user?: SessionUser | null) {
+  return Boolean(
+    user?.isAdmin ||
+      user?.isSuperAdmin ||
+      user?.roles?.includes('admin') ||
+      SUPER_ADMIN_EMAILS.has(String(user?.email || '').trim().toLowerCase()),
+  );
+}
+
+export function isSuperAdminUser(user?: SessionUser | null) {
+  return Boolean(
+    user?.isSuperAdmin ||
+      SUPER_ADMIN_EMAILS.has(String(user?.email || '').trim().toLowerCase()),
+  );
+}
+
+export function getAuthenticatedHomeRoute(user?: SessionUser | null) {
+  return isAdminUser(user) ? '/admin' : '/app';
+}
+
+export function getLogoHomeRoute(user?: SessionUser | null) {
+  return '/app';
 }

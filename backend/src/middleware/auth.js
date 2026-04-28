@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { User } from '../models/User.js';
+import { ensurePrivilegedAccess, hasRole, isSuperAdmin } from '../utils/roles.js';
 
 async function resolveUserFromHeader(authHeader = '') {
   const [, token] = authHeader.split(' ');
@@ -15,7 +16,17 @@ async function resolveUserFromHeader(authHeader = '') {
   }
 
   const payload = jwt.verify(token, secret);
-  return User.findById(payload.sub);
+  const user = await User.findById(payload.sub);
+
+  if (!user) {
+    return null;
+  }
+
+  if (ensurePrivilegedAccess(user)) {
+    await user.save();
+  }
+
+  return user;
 }
 
 export async function requireAuth(req, res, next) {
@@ -53,4 +64,24 @@ export async function optionalAuth(req, _res, next) {
 
     return next(error);
   }
+}
+
+export function requireAdmin(req, res, next) {
+  if (!req.user || !hasRole(req.user, 'admin')) {
+    return res.status(403).json({
+      message: 'Admin access is required for this action.',
+    });
+  }
+
+  return next();
+}
+
+export function requireSuperAdmin(req, res, next) {
+  if (!req.user || !isSuperAdmin(req.user)) {
+    return res.status(403).json({
+      message: 'Super admin access is required for this action.',
+    });
+  }
+
+  return next();
 }

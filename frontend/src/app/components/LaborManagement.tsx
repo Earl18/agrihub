@@ -19,8 +19,9 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
   const [myJobHistory, setMyJobHistory] = useState<any[]>([]);
 
   const isLaborer = currentUser?.roles?.includes('laborer') || canOfferLabor;
+  const isCommerciallyRestricted = currentUser?.canManageCommercialFeatures === false;
 
-  useEffect(() => {
+  const loadLaborData = () => {
     getLaborData()
       .then((payload) => {
         setAvailableWorkers(payload.availableWorkers || []);
@@ -32,6 +33,19 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
         setMyJobHistory(payload.myJobHistory || []);
       })
       .catch(() => undefined);
+  };
+
+  useEffect(() => {
+    loadLaborData();
+  }, []);
+
+  useEffect(() => {
+    const handleLaborBookingsUpdated = () => {
+      loadLaborData();
+    };
+
+    window.addEventListener('agrihub:labor-bookings-updated', handleLaborBookingsUpdated);
+    return () => window.removeEventListener('agrihub:labor-bookings-updated', handleLaborBookingsUpdated);
   }, []);
 
   const displayWorkers = availableWorkers;
@@ -40,6 +54,11 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
 
   return (
     <div className="space-y-6">
+      {isCommerciallyRestricted && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+          Your account is currently restricted. Labor bookings and laborer access are limited until an admin clears the penalty.
+        </div>
+      )}
       {/* Tab Navigation */}
       <div className="bg-white rounded-lg shadow p-2 flex space-x-2">
         <button
@@ -160,7 +179,7 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
                         ? 'bg-green-600 text-white hover:bg-green-700'
                         : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                     }`}
-                    disabled={worker.availability !== 'Available'}
+                    disabled={worker.availability !== 'Available' || isCommerciallyRestricted}
                   >
                     Book Now
                   </button>
@@ -176,6 +195,11 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
           <div className="p-6">
             <h3 className="text-lg font-semibold mb-6">Active Labor Bookings</h3>
             <div className="space-y-4">
+              {displayActiveBookings.length === 0 && (
+                <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
+                  Your confirmed labor bookings will appear here once you book a worker from this account.
+                </div>
+              )}
               {displayActiveBookings.map((booking) => (
                 <div key={booking.id} className="border border-gray-200 rounded-lg p-4 hover:border-green-500 transition-colors">
                   <div className="flex flex-col md:flex-row md:items-center justify-between">
@@ -233,6 +257,11 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
           <div className="p-6">
             <h3 className="text-lg font-semibold mb-6">Booking History</h3>
             <div className="space-y-4">
+              {displayBookingHistory.length === 0 && (
+                <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
+                  Only completed or past labor bookings from this account will appear here.
+                </div>
+              )}
               {displayBookingHistory.map((booking) => (
                 <div key={booking.id} className="border border-gray-200 rounded-lg p-4">
                   <div className="flex items-start justify-between">
@@ -291,23 +320,38 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
       {activeTab === 'work' && isLaborer && (
         <div className="space-y-6">
           <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold mb-4">My Laborer Access</h3>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <h3 className="text-lg font-semibold mb-2">My Laborer Profile</h3>
+            <p className="text-sm text-gray-500 mb-4">
+              Role details buyers use when reviewing your labor profile and deciding whether to book you.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
               <div className="rounded-xl bg-gray-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500">Role</p>
-                <p className="mt-1 font-semibold text-gray-900">{myLaborProfile?.workerType || 'Laborer'}</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">Primary Role</p>
+                <p className="mt-1 font-semibold text-gray-900">
+                  {myLaborProfile?.workerType || currentUser?.profile?.specialization || 'Laborer'}
+                </p>
               </div>
               <div className="rounded-xl bg-gray-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500">Availability</p>
-                <p className="mt-1 font-semibold text-gray-900">{myLaborProfile?.availability || 'Available'}</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">Experience</p>
+                <p className="mt-1 font-semibold text-gray-900">
+                  {currentUser?.profile?.experience || 'Add your work experience in Profile'}
+                </p>
               </div>
               <div className="rounded-xl bg-gray-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500">Active Jobs</p>
-                <p className="mt-1 font-semibold text-gray-900">{myActiveJobs.length}</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">Coverage Area</p>
+                <p className="mt-1 font-semibold text-gray-900">
+                  {currentUser?.profile?.location || myLaborProfile?.distance || 'Set your work location in Profile'}
+                </p>
               </div>
               <div className="rounded-xl bg-gray-50 p-4">
-                <p className="text-xs uppercase tracking-wide text-gray-500">Completed Jobs</p>
-                <p className="mt-1 font-semibold text-gray-900">{myJobHistory.length}</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">Verification</p>
+                <p className="mt-1 font-semibold text-gray-900">
+                  {currentUser?.verification?.laborer === 'verified'
+                    ? 'Verified laborer'
+                    : currentUser?.verification?.laborer === 'pending'
+                      ? 'Pending review'
+                      : 'Not verified'}
+                </p>
               </div>
             </div>
             <div className="mt-5 flex flex-wrap gap-2">

@@ -106,6 +106,51 @@ export async function createProfileAvatarSignedUrl(path) {
   };
 }
 
+export async function createVerificationDocumentSignedUrl(path, bucket = getSupabaseBucket()) {
+  const supabase = getSupabaseAdminClient();
+  const { data, error } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60 * 24 * 7);
+
+  if (error) {
+    throw error;
+  }
+
+  return {
+    bucket,
+    url: data.signedUrl,
+  };
+}
+
+export async function deleteVerificationDocuments(documents = []) {
+  const groupedDocuments = documents.reduce((groups, document) => {
+    if (!document?.bucket || !document?.path) {
+      return groups;
+    }
+
+    if (!groups[document.bucket]) {
+      groups[document.bucket] = [];
+    }
+
+    groups[document.bucket].push(document.path);
+    return groups;
+  }, {});
+
+  const supabase = getSupabaseAdminClient();
+
+  await Promise.all(
+    Object.entries(groupedDocuments).map(async ([bucket, paths]) => {
+      if (!Array.isArray(paths) || paths.length === 0) {
+        return;
+      }
+
+      const { error } = await supabase.storage.from(bucket).remove(paths);
+
+      if (error) {
+        throw error;
+      }
+    }),
+  );
+}
+
 export function extractProfileAvatarPath(sourceUrl = '') {
   const bucket = getSupabaseProfileBucket();
   const marker = `/storage/v1/object/public/${bucket}/`;

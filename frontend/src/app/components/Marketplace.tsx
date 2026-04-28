@@ -17,6 +17,7 @@ export function Marketplace({ onAddToCart, currentUser }: MarketplaceProps) {
 
   const categories = ['all', 'seeds', 'fertilizer', 'grains', 'vegetables', 'fruits', 'equipment'];
   const isSeller = currentUser?.roles?.includes('seller') || canManageListings;
+  const isCommerciallyRestricted = currentUser?.canManageCommercialFeatures === false;
 
   useEffect(() => {
     getMarketplaceData()
@@ -35,6 +36,11 @@ export function Marketplace({ onAddToCart, currentUser }: MarketplaceProps) {
 
   return (
     <div className="space-y-6">
+      {isCommerciallyRestricted && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+          Your account is currently restricted. Marketplace selling tools are disabled until an admin clears the penalty.
+        </div>
+      )}
       <div className="bg-white rounded-2xl shadow-sm p-2 flex space-x-2 border border-gray-100">
         <button
           onClick={() => setActiveTab('buy')}
@@ -45,10 +51,10 @@ export function Marketplace({ onAddToCart, currentUser }: MarketplaceProps) {
           Buy Products
         </button>
         <button
-          onClick={() => isSeller && setActiveTab('sell')}
+          onClick={() => isSeller && !isCommerciallyRestricted && setActiveTab('sell')}
           className={`flex-1 py-3 px-4 rounded-xl transition-all duration-200 font-medium ${
             activeTab === 'sell' ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30' : 'text-gray-600 hover:bg-gray-50'
-          } ${!isSeller ? 'opacity-60 cursor-not-allowed' : ''}`}
+          } ${!isSeller || isCommerciallyRestricted ? 'opacity-60 cursor-not-allowed' : ''}`}
         >
           My Listings
         </button>
@@ -132,7 +138,7 @@ export function Marketplace({ onAddToCart, currentUser }: MarketplaceProps) {
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-semibold text-gray-900">My Product Listings</h3>
             <button
-              disabled={!isSeller}
+              disabled={!isSeller || isCommerciallyRestricted}
               className="bg-gradient-to-r from-green-500 to-green-600 text-white px-6 py-3 rounded-xl hover:shadow-lg hover:shadow-green-500/30 transition-all duration-200 flex items-center space-x-2 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Plus className="w-4 h-4" />

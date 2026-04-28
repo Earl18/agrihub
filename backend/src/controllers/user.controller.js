@@ -1,10 +1,21 @@
 import { User } from '../models/User.js';
 import { appendActivity, getUserActivities } from '../utils/activityLog.js';
-import { getUserRoles, getVerificationState, hasRole, roleQuery } from '../utils/roles.js';
+import { sendEmailChangeVerificationCode } from '../utils/mailer.js';
+import {
+  canManageCommercialFeatures,
+  ensurePrivilegedAccess,
+  getPenaltyState,
+  getUserRoles,
+  getVerificationState,
+  hasRole,
+  isSuperAdmin,
+  roleQuery,
+} from '../utils/roles.js';
 import {
   createProfileAvatarUploadTarget,
   createProfileAvatarSignedUrl,
   createVerificationUploadTarget,
+  deleteVerificationDocuments,
   extractProfileAvatarPath,
 } from '../utils/verificationStorage.js';
 
@@ -37,9 +48,54 @@ async function sanitizeUser(user) {
     role: user.role,
     accountType: user.accountType,
     roles: getUserRoles(user),
+    isAdmin: hasRole(user, 'admin'),
+    isSuperAdmin: isSuperAdmin(user),
     verification: getVerificationState(user),
+    verificationMeta: {
+      seller: {
+        reviewReason: user.verification?.seller?.reviewReason || '',
+        rejectedAt: user.verification?.seller?.rejectedAt || null,
+      },
+      laborer: {
+        reviewReason: user.verification?.laborer?.reviewReason || '',
+        rejectedAt: user.verification?.laborer?.rejectedAt || null,
+      },
+    },
+    emailChangePending: user?.emailVerification?.pendingEmail
+      ? {
+          email: user.emailVerification.pendingEmail,
+          requestedAt: user.emailVerification?.requestedAt || null,
+        }
+      : null,
+    penalty: getPenaltyState(user),
+    canManageCommercialFeatures: canManageCommercialFeatures(user),
     profile: await sanitizeProfile(user.profile),
   };
+}
+
+function buildEmailVerificationCode() {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function buildVerificationWindow() {
+  const now = new Date();
+  return {
+    now,
+    expiresAt: new Date(now.getTime() + 15 * 60 * 1000),
+  };
+}
+
+function isEmailVerificationCodeValid(user, code) {
+  return (
+    user?.emailVerification?.code &&
+    user.emailVerification.code === code &&
+    user.emailVerification.expiresAt &&
+    new Date(user.emailVerification.expiresAt).getTime() > Date.now()
+  );
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function getProfileStats(user) {
@@ -48,6 +104,12 @@ function getProfileStats(user) {
   const activeJobs = Array.isArray(user.laborProfile?.activeBookings)
     ? user.laborProfile.activeBookings.length
     : 0;
+  const completedJobs = Array.isArray(user.laborProfile?.bookingHistory)
+    ? user.laborProfile.bookingHistory.filter((booking) => booking?.status === 'completed').length
+    : 0;
+  const laborRate = Number(user.laborProfile?.rate || 0);
+  const laborAvailability = String(user.laborProfile?.availability || 'Unavailable').trim() || 'Unavailable';
+  const laborRating = Number(user.laborProfile?.rating || 0);
   const totalSales = listings.reduce(
     (sum, listing) => sum + Number(listing.price || 0) * Number(listing.orders || 0),
     0,
@@ -85,9 +147,29 @@ function getProfileStats(user) {
 
   if (verification.laborer === 'verified') {
     stats.push({
+      label: 'Labor Rate',
+      value: `$${laborRate}/hr`,
+      color: 'text-emerald-600',
+    });
+    stats.push({
+      label: 'Availability',
+      value: laborAvailability,
+      color: laborAvailability.toLowerCase() === 'available' ? 'text-green-600' : 'text-amber-600',
+    });
+    stats.push({
+      label: 'Worker Rating',
+      value: laborRating > 0 ? laborRating.toFixed(1) : 'Awaiting reviews',
+      color: 'text-indigo-600',
+    });
+    stats.push({
       label: 'Active Jobs',
       value: String(activeJobs),
       color: 'text-teal-600',
+    });
+    stats.push({
+      label: 'Completed Jobs',
+      value: String(completedJobs),
+      color: 'text-cyan-600',
     });
   }
 
@@ -143,7 +225,11 @@ export async function updateCurrentUser(req, res, next) {
         });
       }
 
-      req.user.email = normalizedEmail;
+      if (normalizedEmail !== String(req.user.email || '').trim().toLowerCase()) {
+        return res.status(400).json({
+          message: 'Verify your new email address before it can replace the current one.',
+        });
+      }
     }
 
     if (typeof phone === 'string') {
@@ -159,6 +245,8 @@ export async function updateCurrentUser(req, res, next) {
     if (!req.user.profile.firstName && typeof name === 'string') {
       req.user.profile.firstName = name.trim();
     }
+
+    ensurePrivilegedAccess(req.user);
 
     const nextSnapshot = JSON.stringify({
       name: req.user.name,
@@ -185,6 +273,132 @@ export async function updateCurrentUser(req, res, next) {
   }
 }
 
+export async function requestEmailChange(req, res, next) {
+  try {
+    const nextEmail = String(req.body?.email || '').trim().toLowerCase();
+
+    if (!nextEmail) {
+      return res.status(400).json({
+        message: 'New email is required.',
+      });
+    }
+
+    if (!isValidEmail(nextEmail)) {
+      return res.status(400).json({
+        message: 'Please enter a valid email address.',
+      });
+    }
+
+    if (nextEmail === String(req.user.email || '').trim().toLowerCase()) {
+      return res.status(400).json({
+        message: 'That email is already your current email address.',
+      });
+    }
+
+    const existingUser = await User.findOne({
+      email: nextEmail,
+      _id: { $ne: req.user._id },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: 'That email address is already in use.',
+      });
+    }
+
+    const code = buildEmailVerificationCode();
+    const { now, expiresAt } = buildVerificationWindow();
+
+    req.user.emailVerification = {
+      code,
+      expiresAt,
+      requestedAt: now,
+      verifiedAt: null,
+      pendingEmail: nextEmail,
+    };
+
+    appendActivity(req.user, {
+      description: `Requested email change to ${nextEmail}`,
+      status: 'pending',
+      createdAt: now,
+    });
+    await req.user.save();
+
+    await sendEmailChangeVerificationCode({
+      toEmail: nextEmail,
+      code,
+      name: req.user.name,
+    });
+
+    res.json({
+      message: 'A verification code was sent to your new email address.',
+      pendingEmail: nextEmail,
+      requestedAt: now.toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function verifyEmailChange(req, res, next) {
+  try {
+    const nextEmail = String(req.body?.email || '').trim().toLowerCase();
+    const code = String(req.body?.code || '').trim();
+
+    if (!nextEmail || !code) {
+      return res.status(400).json({
+        message: 'Email and verification code are required.',
+      });
+    }
+
+    if (!req.user.emailVerification?.pendingEmail || req.user.emailVerification.pendingEmail !== nextEmail) {
+      return res.status(400).json({
+        message: 'There is no pending email change for that address.',
+      });
+    }
+
+    if (!isEmailVerificationCodeValid(req.user, code)) {
+      return res.status(400).json({
+        message: 'The verification code is invalid or has expired.',
+      });
+    }
+
+    const existingUser = await User.findOne({
+      email: nextEmail,
+      _id: { $ne: req.user._id },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: 'That email address is already in use.',
+      });
+    }
+
+    req.user.email = nextEmail;
+    req.user.emailVerified = true;
+    req.user.emailVerification = {
+      code: '',
+      expiresAt: null,
+      requestedAt: req.user.emailVerification?.requestedAt || null,
+      verifiedAt: new Date(),
+      pendingEmail: '',
+    };
+
+    appendActivity(req.user, {
+      description: `Changed account email to ${nextEmail}`,
+      status: 'completed',
+    });
+    await req.user.save();
+
+    res.json({
+      message: 'Email address updated successfully.',
+      user: await sanitizeUser(req.user),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function applyForRole(req, res, next) {
   try {
     const { role, application = {} } = req.body || {};
@@ -192,6 +406,12 @@ export async function applyForRole(req, res, next) {
     if (!['seller', 'laborer'].includes(role)) {
       return res.status(400).json({
         message: 'Only seller and laborer role applications are supported.',
+      });
+    }
+
+    if (!canManageCommercialFeatures(req.user)) {
+      return res.status(403).json({
+        message: 'This account is currently restricted from marketplace and workforce actions.',
       });
     }
 
@@ -242,6 +462,7 @@ export async function applyForRole(req, res, next) {
       }
 
       if (
+        !sellerDocumentTypes.has('farm-proof') &&
         !sellerDocumentTypes.has('barangay-certificate') &&
         !sellerDocumentTypes.has('farm-photos') &&
         !sellerDocumentTypes.has('rsbsa')
@@ -255,11 +476,15 @@ export async function applyForRole(req, res, next) {
         req.user.roles.push('seller');
       }
 
+      await deleteVerificationDocuments(req.user.verification?.seller?.documents || []);
+
       req.user.accountType = 'vendor';
       req.user.verification.seller = {
         status: 'pending',
         submittedAt: now,
         verifiedAt: null,
+        rejectedAt: null,
+        reviewReason: '',
         documents,
         details: {
           idType: details.idType,
@@ -320,11 +545,15 @@ export async function applyForRole(req, res, next) {
         req.user.roles.push('laborer');
       }
 
+      await deleteVerificationDocuments(req.user.verification?.laborer?.documents || []);
+
       req.user.accountType = 'laborer';
       req.user.verification.laborer = {
         status: 'pending',
         submittedAt: now,
         verifiedAt: null,
+        rejectedAt: null,
+        reviewReason: '',
         documents,
         details: {
           idType: details.idType,
@@ -430,8 +659,16 @@ export async function getDashboardData(req, res, next) {
               ? 'buyer purchases'
               : stat.label === 'Workers Hired'
                 ? 'labor bookings'
+                : stat.label === 'Labor Rate'
+                  ? 'current hourly rate'
+                  : stat.label === 'Availability'
+                    ? 'booking status'
+                    : stat.label === 'Worker Rating'
+                      ? 'from completed jobs'
                 : stat.label === 'Active Jobs'
                   ? 'worker jobs'
+                  : stat.label === 'Completed Jobs'
+                    ? 'finished assignments'
                   : 'service bookings',
         tone:
           stat.label === 'Total Sales'
@@ -440,8 +677,16 @@ export async function getDashboardData(req, res, next) {
               ? 'purchases'
               : stat.label === 'Workers Hired'
                 ? 'workers'
+                : stat.label === 'Labor Rate'
+                  ? 'sales'
+                  : stat.label === 'Availability'
+                    ? 'laborer'
+                    : stat.label === 'Worker Rating'
+                      ? 'workers'
                 : stat.label === 'Active Jobs'
                   ? 'laborer'
+                  : stat.label === 'Completed Jobs'
+                    ? 'laborer'
                   : 'services',
         icon:
           stat.label === 'Total Sales'
@@ -450,8 +695,16 @@ export async function getDashboardData(req, res, next) {
               ? 'DollarSign'
               : stat.label === 'Workers Hired'
                 ? 'Users'
+                : stat.label === 'Labor Rate'
+                  ? 'DollarSign'
+                  : stat.label === 'Availability'
+                    ? 'Truck'
+                    : stat.label === 'Worker Rating'
+                      ? 'TrendingUp'
                 : stat.label === 'Active Jobs'
                   ? 'TrendingUp'
+                  : stat.label === 'Completed Jobs'
+                    ? 'TrendingUp'
                   : 'Truck',
         id: index,
       })),
@@ -466,8 +719,9 @@ export async function getDashboardData(req, res, next) {
 export async function getMarketplaceData(req, res, next) {
   try {
     const vendors = await User.find(roleQuery('seller'));
+    const visibleVendors = vendors.filter((vendor) => canManageCommercialFeatures(vendor));
 
-    const products = vendors.flatMap((vendor) =>
+    const products = visibleVendors.flatMap((vendor) =>
       vendor.marketplaceListings.map((listing, index) => ({
         id: `${vendor._id}-${index}`,
         ...listing.toObject(),
@@ -479,7 +733,7 @@ export async function getMarketplaceData(req, res, next) {
     res.json({
       products,
       myListings:
-        hasRole(req.user, 'seller')
+        hasRole(req.user, 'seller') && canManageCommercialFeatures(req.user)
           ? req.user.marketplaceListings.map((listing, index) => ({
               id: `${req.user._id}-${index}`,
               ...listing.toObject(),
@@ -487,7 +741,7 @@ export async function getMarketplaceData(req, res, next) {
               status: Number(listing.stock) > 0 ? 'active' : 'sold out',
             }))
           : [],
-      canManageListings: hasRole(req.user, 'seller'),
+      canManageListings: hasRole(req.user, 'seller') && canManageCommercialFeatures(req.user),
     });
   } catch (error) {
     next(error);
@@ -497,9 +751,16 @@ export async function getMarketplaceData(req, res, next) {
 export async function getLaborData(req, res, next) {
   try {
     const laborers = await User.find(roleQuery('laborer'));
+    const availableLaborers = laborers.filter((laborer) => canManageCommercialFeatures(laborer));
+    const currentUserActiveBookings = Array.isArray(req.user?.laborBookings?.activeBookings)
+      ? req.user.laborBookings.activeBookings
+      : [];
+    const currentUserBookingHistory = Array.isArray(req.user?.laborBookings?.bookingHistory)
+      ? req.user.laborBookings.bookingHistory
+      : [];
 
     res.json({
-      availableWorkers: laborers.map((laborer) => ({
+      availableWorkers: availableLaborers.map((laborer) => ({
         id: laborer._id.toString(),
         name: laborer.name,
         type: laborer.laborProfile.workerType,
@@ -510,20 +771,16 @@ export async function getLaborData(req, res, next) {
         skills: laborer.laborProfile.skills,
         distance: laborer.laborProfile.distance,
       })),
-      activeBookings: laborers.flatMap((laborer, laborerIndex) =>
-        laborer.laborProfile.activeBookings.map((booking, bookingIndex) => ({
-          id: `${laborerIndex}-${bookingIndex}`,
-          ...booking.toObject(),
-        })),
-      ),
-      bookingHistory: laborers.flatMap((laborer, laborerIndex) =>
-        laborer.laborProfile.bookingHistory.map((booking, bookingIndex) => ({
-          id: `${laborerIndex}-${bookingIndex}`,
-          ...booking.toObject(),
-        })),
-      ),
-      canOfferLabor: hasRole(req.user, 'laborer'),
-      myLaborProfile: hasRole(req.user, 'laborer')
+      activeBookings: currentUserActiveBookings.map((booking, bookingIndex) => ({
+        id: `my-active-${bookingIndex}`,
+        ...(booking.toObject?.() || booking),
+      })),
+      bookingHistory: currentUserBookingHistory.map((booking, bookingIndex) => ({
+        id: `my-history-${bookingIndex}`,
+        ...(booking.toObject?.() || booking),
+      })),
+      canOfferLabor: hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user),
+      myLaborProfile: hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user)
         ? {
             workerType: req.user.laborProfile.workerType,
             rate: req.user.laborProfile.rate,
@@ -533,8 +790,114 @@ export async function getLaborData(req, res, next) {
             rating: req.user.laborProfile.rating,
           }
         : null,
-      myActiveJobs: hasRole(req.user, 'laborer') ? req.user.laborProfile.activeBookings || [] : [],
-      myJobHistory: hasRole(req.user, 'laborer') ? req.user.laborProfile.bookingHistory || [] : [],
+      myActiveJobs:
+        hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user)
+          ? req.user.laborProfile.activeBookings || []
+          : [],
+      myJobHistory:
+        hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user)
+          ? req.user.laborProfile.bookingHistory || []
+          : [],
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function createLaborBooking(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: 'Authentication required.',
+      });
+    }
+
+    if (!canManageCommercialFeatures(req.user)) {
+      return res.status(403).json({
+        message: 'This account is currently restricted from marketplace and workforce actions.',
+      });
+    }
+
+    const workerId = String(req.body?.workerId || '').trim();
+    const date = String(req.body?.date || '').trim();
+    const time = String(req.body?.time || '').trim();
+    const duration = String(req.body?.duration || '').trim();
+    const location = String(req.body?.location || '').trim();
+
+    if (!workerId || !date || !time || !duration || !location) {
+      return res.status(400).json({
+        message: 'Worker, date, time, duration, and location are required.',
+      });
+    }
+
+    const worker = await User.findOne({
+      _id: workerId,
+      ...roleQuery('laborer'),
+    });
+
+    if (!worker || !canManageCommercialFeatures(worker)) {
+      return res.status(404).json({
+        message: 'Selected worker is not available for booking.',
+      });
+    }
+
+    const numericRate = Number(worker.laborProfile?.rate || req.body?.rate || 0);
+    const durationHours = parseInt(duration, 10);
+    const bookingCost = Number.isFinite(durationHours) && durationHours > 0
+      ? numericRate * durationHours
+      : numericRate;
+    const bookingType = String(
+      req.body?.type || worker.laborProfile?.workerType || worker.profile?.specialization || 'Labor',
+    ).trim();
+    const buyerName = String(req.user.name || '').trim() || 'Authenticated User';
+
+    const buyerBooking = {
+      worker: worker.name,
+      workerId: worker._id.toString(),
+      type: bookingType,
+      date,
+      time,
+      duration,
+      location,
+      rate: numericRate,
+      status: 'confirmed',
+      cost: bookingCost,
+      bookedByUserId: req.user._id.toString(),
+      bookedByName: buyerName,
+    };
+
+    const workerBooking = {
+      ...buyerBooking,
+      worker: buyerName,
+    };
+
+    if (!req.user.laborBookings) {
+      req.user.laborBookings = {
+        activeBookings: [],
+        bookingHistory: [],
+      };
+    }
+
+    req.user.laborBookings.activeBookings = [
+      ...(Array.isArray(req.user.laborBookings.activeBookings) ? req.user.laborBookings.activeBookings : []),
+      buyerBooking,
+    ];
+
+    worker.laborProfile.activeBookings = [
+      ...(Array.isArray(worker.laborProfile?.activeBookings) ? worker.laborProfile.activeBookings : []),
+      workerBooking,
+    ];
+
+    appendActivity(req.user, {
+      description: `Booked worker ${worker.name} for ${date}`,
+      status: 'confirmed',
+    });
+
+    await Promise.all([req.user.save(), worker.save()]);
+
+    res.status(201).json({
+      message: 'Worker booked successfully.',
+      booking: buyerBooking,
     });
   } catch (error) {
     next(error);
@@ -544,8 +907,9 @@ export async function getLaborData(req, res, next) {
 export async function getServicesData(_req, res, next) {
   try {
     const providers = await User.find(roleQuery('service'));
+    const visibleProviders = providers.filter((provider) => canManageCommercialFeatures(provider));
 
-    const grouped = providers.map((provider) => ({
+    const grouped = visibleProviders.map((provider) => ({
       id: provider._id.toString(),
       category: provider.serviceProfile.category,
       categoryId:

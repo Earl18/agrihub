@@ -10,13 +10,19 @@ import {
   resetPassword,
   verifyPasswordResetCode,
 } from '../../features/auth/api';
-import { persistSession } from '../../shared/auth/session';
+import {
+  getAuthenticatedHomeRoute,
+  getLogoHomeRoute,
+  getSessionUser,
+  persistSession,
+} from '../../shared/auth/session';
 
 type ResetStep = 'request' | 'verify' | 'reset';
 
 export function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const sessionUser = getSessionUser();
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -84,8 +90,7 @@ export function LoginPage() {
             persistSession(response.token, response.user);
 
             const redirectTarget = searchParams.get('redirect');
-            const isAdmin = response.user.email.toLowerCase() === 'admin@agrihub.com';
-            navigate(redirectTarget || (isAdmin ? '/admin' : '/app'));
+            navigate(redirectTarget || getAuthenticatedHomeRoute(response.user));
           } catch (error) {
             setErrorMessage(
               error instanceof Error ? error.message : 'Google sign-in failed. Please try again.',
@@ -156,8 +161,7 @@ export function LoginPage() {
       persistSession(response.token, response.user);
 
       const redirectTarget = searchParams.get('redirect');
-      const isAdmin = response.user.email.toLowerCase() === 'admin@agrihub.com';
-      navigate(redirectTarget || (isAdmin ? '/admin' : '/app'));
+      navigate(redirectTarget || getAuthenticatedHomeRoute(response.user));
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Unable to sign in right now.',
@@ -244,7 +248,7 @@ export function LoginPage() {
           className="absolute inset-0 w-full h-full object-cover"
         />
         <div className="relative z-20 flex flex-col justify-between p-12 w-full">
-          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate('/')}>
+          <div className="flex items-center space-x-3 cursor-pointer" onClick={() => navigate(getLogoHomeRoute(sessionUser))}>
             <div className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center border border-white/30">
               <Sprout className="w-6 h-6 text-white" />
             </div>
@@ -295,7 +299,7 @@ export function LoginPage() {
 
       <div className="w-full lg:w-1/2 flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">
-          <div className="lg:hidden flex items-center justify-center space-x-3 mb-10 cursor-pointer" onClick={() => navigate('/')}>
+          <div className="lg:hidden flex items-center justify-center space-x-3 mb-10 cursor-pointer" onClick={() => navigate(getLogoHomeRoute(sessionUser))}>
             <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-green-600 rounded-xl flex items-center justify-center shadow-lg shadow-green-500/30">
               <Sprout className="w-6 h-6 text-white" />
             </div>

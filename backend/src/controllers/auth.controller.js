@@ -3,7 +3,16 @@ import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { User } from '../models/User.js';
-import { getUserRoles, getVerificationState } from '../utils/roles.js';
+import {
+  canManageCommercialFeatures,
+  ensurePrivilegedAccess,
+  getPenaltyState,
+  getUserRoles,
+  getVerificationState,
+  hasRole,
+  isSuperAdmin,
+  isSuperAdminEmail,
+} from '../utils/roles.js';
 import { appendActivity } from '../utils/activityLog.js';
 import { sendEmailVerificationCode, sendPasswordResetCode } from '../utils/mailer.js';
 import {
@@ -40,7 +49,11 @@ async function sanitizeUser(user) {
     role: user.role,
     accountType: user.accountType,
     roles: getUserRoles(user),
+    isAdmin: hasRole(user, 'admin'),
+    isSuperAdmin: isSuperAdmin(user),
     verification: getVerificationState(user),
+    penalty: getPenaltyState(user),
+    canManageCommercialFeatures: canManageCommercialFeatures(user),
     phone: user.phone,
     profile: await sanitizeProfile(user.profile),
   };
@@ -211,7 +224,8 @@ export async function register(req, res, next) {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const role = normalizedEmail === 'admin@agrihub.com' ? 'admin' : 'user';
+    const isPrivilegedEmail = isSuperAdminEmail(normalizedEmail);
+    const role = isPrivilegedEmail ? 'admin' : 'user';
 
     const user = await User.create({
       name: normalizedName,
@@ -221,12 +235,17 @@ export async function register(req, res, next) {
       emailVerified: false,
       role,
       roles: role === 'admin' ? ['buyer', 'admin'] : ['buyer'],
+      accountType: role === 'admin' ? 'admin' : 'customer',
       profile: {
         firstName: profileNames.firstName,
         middleName: profileNames.middleName,
         lastName: profileNames.lastName,
       },
     });
+
+    if (ensurePrivilegedAccess(user)) {
+      await user.save();
+    }
 
     appendActivity(user, {
       description: 'Created an AgriHub account',
@@ -288,6 +307,10 @@ export async function login(req, res, next) {
       });
     }
 
+    if (ensurePrivilegedAccess(user)) {
+      await user.save();
+    }
+
     appendActivity(user, {
       description: 'Signed in to AgriHub',
       status: 'completed',
@@ -328,7 +351,7 @@ export async function googleLogin(req, res, next) {
     }
 
     const normalizedEmail = payload.email.trim().toLowerCase();
-    const role = normalizedEmail === 'admin@agrihub.com' ? 'admin' : 'user';
+    const role = isSuperAdminEmail(normalizedEmail) ? 'admin' : 'user';
     const googleNames = splitName(payload.name?.trim() || normalizedEmail.split('@')[0]);
 
     let user = await User.findOne({
@@ -343,6 +366,7 @@ export async function googleLogin(req, res, next) {
         emailVerified: payload.email_verified !== false,
         role,
         roles: role === 'admin' ? ['buyer', 'admin'] : ['buyer'],
+        accountType: role === 'admin' ? 'admin' : 'customer',
         profile: {
           firstName: googleNames.firstName,
           middleName: googleNames.middleName,
@@ -384,6 +408,10 @@ export async function googleLogin(req, res, next) {
 
       if (!user.emailVerified && payload.email_verified !== false) {
         user.emailVerified = true;
+        changed = true;
+      }
+
+      if (ensurePrivilegedAccess(user)) {
         changed = true;
       }
 
@@ -438,6 +466,11 @@ export async function verifyRegistrationCode(req, res, next) {
       description: 'Verified email address',
       status: 'completed',
     });
+
+    if (ensurePrivilegedAccess(user)) {
+      await user.save();
+    }
+
     await user.save();
 
     return res.json({

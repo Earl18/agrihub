@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, ReactNode, SetStateAction } from 'react';
 import {
   AlertCircle,
@@ -61,6 +61,7 @@ interface KycFormState {
 interface RolesVerificationProps {
   user: SessionUser | null;
   onUserUpdated: (user: SessionUser) => void;
+  defaultExpandedRole?: RoleKey | null;
 }
 
 const SKILLS = ['Harvesting', 'Irrigation', 'Planting', 'Weeding', 'Spraying', 'Land Preparation'];
@@ -332,6 +333,8 @@ function KycWizard({
   subtitle,
   icon,
   status,
+  reviewReason,
+  rejectedAt,
   expanded,
   onToggle,
   form,
@@ -344,6 +347,8 @@ function KycWizard({
   subtitle: string;
   icon: ReactNode;
   status: VerificationStatus;
+  reviewReason?: string;
+  rejectedAt?: string | null;
   expanded: boolean;
   onToggle: () => void;
   form: KycFormState;
@@ -354,6 +359,7 @@ function KycWizard({
   const [step, setStep] = useState<WizardStep>(0);
   const tone = getStatusTone(status);
   const completion = useMemo(() => getStepCompletion(role, form), [form, role]);
+  const canTogglePanel = status !== 'pending';
 
   useEffect(() => {
     if (status !== 'unverified') {
@@ -399,7 +405,7 @@ function KycWizard({
     <div className="overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-sm">
       <button
         type="button"
-        onClick={() => status === 'unverified' && onToggle()}
+        onClick={() => canTogglePanel && onToggle()}
         className="flex w-full items-center justify-between p-5 text-left transition-colors hover:bg-gray-50"
       >
         <div className="flex items-center gap-4">
@@ -416,7 +422,7 @@ function KycWizard({
             {tone.icon}
             <span>{tone.label}</span>
           </span>
-          {status === 'unverified' ? (
+          {canTogglePanel ? (
             expanded ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />
           ) : null}
         </div>
@@ -432,7 +438,7 @@ function KycWizard({
         </div>
       ) : null}
 
-      {status === 'verified' ? (
+      {status === 'verified' && expanded ? (
         <div className="border-t border-gray-100 px-5 pb-5">
           <div className="mt-5 rounded-2xl border border-green-200 bg-green-50 p-5 text-center">
             <CheckCircle2 className="mx-auto mb-3 h-8 w-8 text-green-600" />
@@ -445,6 +451,20 @@ function KycWizard({
       {expanded && status === 'unverified' ? (
         <div className="border-t border-gray-100 px-5 pb-5">
           <div className="space-y-5 pt-5">
+            {reviewReason ? (
+              <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                <p className="text-sm font-semibold text-red-800">Previous submission was rejected</p>
+                <p className="mt-1 text-sm text-red-700">{reviewReason}</p>
+                {rejectedAt ? (
+                  <p className="mt-2 text-xs text-red-600">
+                    Reviewed on {new Date(rejectedAt).toLocaleString()}
+                  </p>
+                ) : null}
+                <p className="mt-2 text-xs text-red-600">
+                  Upload a corrected file set below. Your new submission will replace the previous stored documents for this role.
+                </p>
+              </div>
+            ) : null}
             <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
               <div className="mb-3 flex items-center justify-between">
                 <div>
@@ -789,7 +809,12 @@ function KycWizard({
   );
 }
 
-export function RolesVerification({ user, onUserUpdated }: RolesVerificationProps) {
+export function RolesVerification({
+  user,
+  onUserUpdated,
+  defaultExpandedRole = null,
+}: RolesVerificationProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const [sellerStatus, setSellerStatus] = useState<VerificationStatus>('unverified');
   const [laborerStatus, setLaborerStatus] = useState<VerificationStatus>('unverified');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -804,6 +829,30 @@ export function RolesVerification({ user, onUserUpdated }: RolesVerificationProp
     setSellerStatus(user?.verification?.seller || 'unverified');
     setLaborerStatus(user?.verification?.laborer || 'unverified');
   }, [user]);
+
+  useEffect(() => {
+    if (defaultExpandedRole === 'seller' && (user?.verification?.seller || 'unverified') === 'unverified') {
+      setSellerExpanded(true);
+      setLaborerExpanded(false);
+    }
+
+    if (defaultExpandedRole === 'laborer' && (user?.verification?.laborer || 'unverified') === 'unverified') {
+      setLaborerExpanded(true);
+      setSellerExpanded(false);
+    }
+  }, [defaultExpandedRole, user]);
+
+  useEffect(() => {
+    if (!defaultExpandedRole || !containerRef.current) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 150);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [defaultExpandedRole]);
 
   const activeRoles: { label: string; icon: ReactNode; color: string }[] = [
     { label: 'Buyer', icon: <ShoppingBag className="h-3.5 w-3.5" />, color: 'bg-blue-100 text-blue-700' },
@@ -909,7 +958,7 @@ export function RolesVerification({ user, onUserUpdated }: RolesVerificationProp
   };
 
   return (
-    <div className="rounded-3xl bg-white p-6 shadow">
+    <div ref={containerRef} className="rounded-3xl bg-white p-6 shadow">
       <div className="mb-1 flex items-center gap-3">
         <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-green-50">
           <ShieldCheck className="h-5 w-5 text-green-600" />
@@ -965,6 +1014,8 @@ export function RolesVerification({ user, onUserUpdated }: RolesVerificationProp
           subtitle="Identity, farm proof, and review before the account can list products."
           icon={<Leaf className="h-6 w-6" />}
           status={sellerStatus}
+          reviewReason={user?.verificationMeta?.seller?.reviewReason}
+          rejectedAt={user?.verificationMeta?.seller?.rejectedAt}
           expanded={sellerExpanded}
           onToggle={() => {
             setSellerExpanded((current) => !current);
@@ -982,6 +1033,8 @@ export function RolesVerification({ user, onUserUpdated }: RolesVerificationProp
           subtitle="Verify identity and work profile before taking job requests."
           icon={<HardHat className="h-6 w-6" />}
           status={laborerStatus}
+          reviewReason={user?.verificationMeta?.laborer?.reviewReason}
+          rejectedAt={user?.verificationMeta?.laborer?.rejectedAt}
           expanded={laborerExpanded}
           onToggle={() => {
             setLaborerExpanded((current) => !current);

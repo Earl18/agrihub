@@ -107,3 +107,38 @@ This code expires in 15 minutes. If you did not create an account, you can ignor
     `,
   });
 }
+
+export async function sendEmailChangeVerificationCode({ toEmail, code, name }) {
+  const transporter = await getTransporter();
+  const from = process.env.SMTP_FROM?.trim() || requireMailEnv('SMTP_USER');
+  const appName = 'AgriHub';
+  const greetingName = name?.trim() || 'there';
+
+  await transporter.sendMail({
+    from,
+    to: toEmail,
+    subject: `${appName} email change verification code`,
+    text: `Hello ${greetingName},
+
+We received a request to change the email address on your AgriHub account.
+
+Your verification code is: ${code}
+
+This code expires in 15 minutes. Your account email will only be updated after this code is confirmed.
+`,
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
+        <h2 style="margin-bottom: 8px;">Confirm your new AgriHub email</h2>
+        <p>Hello ${greetingName},</p>
+        <p>We received a request to change the email address on your AgriHub account.</p>
+        <p style="margin: 24px 0;">
+          <span style="display: inline-block; padding: 12px 18px; border-radius: 12px; background: #16a34a; color: white; font-size: 24px; font-weight: 700; letter-spacing: 4px;">
+            ${code}
+          </span>
+        </p>
+        <p>This code expires in 15 minutes.</p>
+        <p>Your account email will only be updated after this code is confirmed.</p>
+      </div>
+    `,
+  });
+}
