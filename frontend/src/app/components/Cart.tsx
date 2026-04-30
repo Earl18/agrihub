@@ -1,5 +1,6 @@
 import { Minus, Plus, Trash2, ShoppingCart, X } from 'lucide-react';
 import { useState } from 'react';
+import { formatPhpCurrency, formatPhpRate } from '../../shared/format/currency';
 
 export interface CartItem {
   id: number;
@@ -85,7 +86,7 @@ export function Cart({
                       <h3 className="font-semibold text-sm text-gray-900 truncate">{item.name}</h3>
                       <p className="text-xs text-gray-500">{item.seller}</p>
                       <p className="text-lg font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent mt-1">
-                        ${item.price}/{item.unit}
+                        {formatPhpRate(item.price, item.unit, { shortHour: true })}
                       </p>
                       
                       {/* Quantity Controls */}
@@ -120,7 +121,7 @@ export function Cart({
                       </div>
                       
                       <div className="mt-2 text-sm text-gray-600">
-                        Subtotal: <span className="font-semibold text-gray-900">${(item.price * item.quantity).toFixed(2)}</span>
+                        Subtotal: <span className="font-semibold text-gray-900">{formatPhpCurrency(item.price * item.quantity)}</span>
                       </div>
                     </div>
                   </div>
@@ -136,19 +137,19 @@ export function Cart({
             <div className="space-y-3 mb-6">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Subtotal</span>
-                <span className="font-semibold text-gray-900">${subtotal.toFixed(2)}</span>
+                <span className="font-semibold text-gray-900">{formatPhpCurrency(subtotal)}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Tax (8%)</span>
-                <span className="font-semibold text-gray-900">${tax.toFixed(2)}</span>
+                <span className="font-semibold text-gray-900">{formatPhpCurrency(tax)}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Shipping</span>
-                <span className="font-semibold text-gray-900">${shipping.toFixed(2)}</span>
+                <span className="font-semibold text-gray-900">{formatPhpCurrency(shipping)}</span>
               </div>
               <div className="border-t border-gray-200 pt-3 flex justify-between">
                 <span className="font-semibold text-gray-900">Total</span>
-                <span className="text-2xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">${total.toFixed(2)}</span>
+                <span className="text-2xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">{formatPhpCurrency(total)}</span>
               </div>
             </div>
             <button

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Search, Filter, ShoppingCart, Plus } from 'lucide-react';
 import { getMarketplaceData } from '../../features/app/api';
 import { SessionUser } from '../../shared/auth/session';
+import { formatPhpCurrency, formatPhpRate } from '../../shared/format/currency';
 
 interface MarketplaceProps {
   onAddToCart: (product: any) => void;
@@ -104,7 +105,9 @@ export function Marketplace({ onAddToCart, currentUser }: MarketplaceProps) {
                   <p className="text-sm text-gray-500 mb-4">{product.seller}</p>
                   <div className="flex items-center justify-between mb-4">
                     <div>
-                      <p className="text-2xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">${product.price}</p>
+                      <p className="text-2xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">
+                        {formatPhpCurrency(product.price)}
+                      </p>
                       <p className="text-xs text-gray-500">per {product.unit}</p>
                     </div>
                     <div className="text-right">
@@ -165,7 +168,9 @@ export function Marketplace({ onAddToCart, currentUser }: MarketplaceProps) {
                       </span>
                     </div>
                     <p className="text-sm text-gray-500">Quantity: {listing.quantity} {listing.unit}</p>
-                    <p className="text-xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent mt-2">${listing.price}/{listing.unit}</p>
+                    <p className="mt-2 text-xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">
+                      {formatPhpRate(listing.price, listing.unit, { shortHour: true })}
+                    </p>
                   </div>
                   <div className="mt-4 md:mt-0 flex flex-col md:flex-row md:items-center space-y-2 md:space-y-0 md:space-x-6">
                     <div className="text-center">

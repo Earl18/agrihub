@@ -42,10 +42,6 @@ export function RegisterPage() {
 
   const update = (field: string, value: string) => setForm((prev) => ({ ...prev, [field]: value }));
 
-  const updatePhone = (value: string) => {
-    update('phone', value.replace(/\D/g, '').slice(0, 11));
-  };
-
   const passwordStrength = () => {
     const p = form.password;
     if (!p) return { label: '', color: '', width: '0%' };
@@ -83,7 +79,7 @@ export function RegisterPage() {
       return;
     }
 
-    if (form.phone && !/^09\d{9}$/.test(form.phone.trim())) {
+    if (form.phone.trim() && !/^09\d{9}$/.test(form.phone.trim())) {
       setErrorMessage('Please enter a valid Philippine mobile number.');
       return;
     }
@@ -279,7 +275,7 @@ export function RegisterPage() {
                   <label className="block text-sm text-gray-700 mb-1.5">Phone Number</label>
                   <div className="relative">
                     <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
-                    <input type="tel" inputMode="numeric" value={form.phone} onChange={(e) => updatePhone(e.target.value)} placeholder="09XX XXX XXXX" className={inputClass} />
+                    <input type="tel" value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="09XXXXXXXXX" className={inputClass} />
                   </div>
                 </div>
 

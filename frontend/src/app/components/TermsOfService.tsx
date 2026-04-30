@@ -64,7 +64,7 @@ export function TermsOfService() {
 
         {/* Footer */}
         <div className="mt-8 text-center">
-          <p className="text-xs text-gray-400">If you have any questions about these terms, contact us at <a href="mailto:support@agrihub.com" className="text-green-600 hover:text-green-700">support@agrihub.com</a></p>
+          <p className="text-xs text-gray-400">If you have any questions about these terms, contact us at <a href="mailto:agrihub183@gmail.com" className="text-green-600 hover:text-green-700">agrihub183@gmail.com</a></p>
         </div>
       </div>
     </div>

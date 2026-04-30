@@ -3,15 +3,20 @@ import {
   Activity,
   Bell,
   Briefcase,
+  Calendar,
   ChartColumn,
   CheckCircle2,
+  Clock,
   Gavel,
   LayoutDashboard,
+  MapPin,
   Package,
   ShieldCheck,
   Sprout,
   TrendingUp,
   Truck,
+  Trash2,
+  User,
   UserCog,
   Users,
   ExternalLink,
@@ -19,8 +24,11 @@ import {
 } from 'lucide-react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import {
+  disableAdminUser,
   deleteAdminMarketplaceListing,
   getAdminOverview,
+  permanentlyDeleteAdminUser,
+  restoreAdminUser,
   updateAdminLaborBooking,
   updateAdminServiceBooking,
   updateAdminUserAccess,
@@ -34,6 +42,7 @@ import {
   isAdminUser,
   isSuperAdminUser,
 } from '../../shared/auth/session';
+import { formatPhpRate } from '../../shared/format/currency';
 
 type AdminTab = 'overview' | 'users' | 'marketplace' | 'labor' | 'services' | 'verification';
 
@@ -211,6 +220,8 @@ export function AdminDashboard() {
   const [verificationFilter, setVerificationFilter] = useState<'all' | 'pending' | 'verified'>('pending');
   const [selectedVerificationId, setSelectedVerificationId] = useState<string | null>(null);
   const [selectedPenaltyUser, setSelectedPenaltyUser] = useState<any | null>(null);
+  const [selectedAccountActionUser, setSelectedAccountActionUser] = useState<any | null>(null);
+  const [accountActionReason, setAccountActionReason] = useState('');
   const [verificationReviewDrafts, setVerificationReviewDrafts] = useState<Record<string, { reason: string }>>({});
   const [userPenaltyDrafts, setUserPenaltyDrafts] = useState<Record<string, {
     status: 'good' | 'warned' | 'restricted' | 'suspended';
@@ -553,7 +564,7 @@ export function AdminDashboard() {
           subtitle="Live operational breakdown across labor and service workflows."
         >
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <div>
+            <div className="hidden">
               <div className="mb-3 flex items-center gap-2">
                 <Activity className="h-4 w-4 text-green-600" />
                 <p className="text-sm font-medium text-gray-900">Labor bookings</p>
@@ -654,8 +665,8 @@ export function AdminDashboard() {
       <div className="space-y-4">
         {filteredUsers.map((user: any) => (
           <div key={user.id} className="rounded-2xl border border-gray-100 p-4">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0 flex-1">
                 <p className="font-semibold text-gray-900">{user.name}</p>
                 <p className="text-sm text-gray-500">{user.email}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -675,6 +686,21 @@ export function AdminDashboard() {
                       {user.penalty.status}
                     </span>
                   ) : null}
+                  {user.accountStatus === 'disabled' ? (
+                    <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-medium text-slate-700">
+                      disabled
+                    </span>
+                  ) : null}
+                  {user.pendingDisableAt ? (
+                    <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-800">
+                      disable queued
+                    </span>
+                  ) : null}
+                  {user.pendingDeleteAt ? (
+                    <span className="rounded-full bg-rose-100 px-3 py-1 text-xs font-medium text-rose-700">
+                      delete queued
+                    </span>
+                  ) : null}
                   {user.isSuperAdmin ? (
                     <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
                       super admin
@@ -686,44 +712,75 @@ export function AdminDashboard() {
                     Penalty reason: {user.penalty.reason || 'No reason provided'}
                   </p>
                 ) : null}
+                {user.accountStatus === 'disabled' ? (
+                  <p className="mt-3 text-sm text-gray-500">
+                    Disabled account{user.disabledReason ? `: ${user.disabledReason}` : '.'}
+                  </p>
+                ) : null}
+                {user.pendingDisableAt ? (
+                  <p className="mt-3 text-sm text-gray-500">
+                    Disable will take effect after active bookings finish
+                    {user.pendingDisableReason ? `: ${user.pendingDisableReason}` : '.'}
+                  </p>
+                ) : null}
               </div>
-              <div className="flex flex-col gap-3 lg:items-end">
-                <div className="flex flex-wrap items-center gap-3">
-                <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                  Seller: <span className="font-medium text-gray-900">{user.verification?.seller || 'unverified'}</span>
-                </div>
-                <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                  Laborer: <span className="font-medium text-gray-900">{user.verification?.laborer || 'unverified'}</span>
-                </div>
-                {sessionUser?.isSuperAdmin && !user.isSuperAdmin ? (
-                  <button
-                    onClick={() =>
-                      void handleAction(
-                        () => updateAdminUserAccess(user.id, !user.isAdmin),
-                        !user.isAdmin ? 'Admin access granted.' : 'Admin access removed.',
-                      )
-                    }
-                    className={`rounded-xl px-4 py-3 text-sm font-medium ${
-                      user.isAdmin
-                        ? 'bg-red-50 text-red-700 hover:bg-red-100'
-                        : 'bg-green-50 text-green-700 hover:bg-green-100'
-                    }`}
-                  >
-                    {user.isAdmin ? 'Remove Admin' : 'Grant Admin'}
-                  </button>
-                ) : null}
-                {!user.isSuperAdmin ? (
-                  <button
-                    onClick={() => setSelectedPenaltyUser(user)}
-                    className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100"
-                  >
-                    <Gavel className="h-4 w-4" />
-                    <span>Penalty</span>
-                  </button>
-                ) : null}
+              <div className="flex flex-col gap-3 lg:w-auto lg:flex-none lg:items-end">
+                <div className="flex flex-wrap items-center gap-3 lg:justify-end">
+                  <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                    Seller: <span className="font-medium text-gray-900">{user.verification?.seller || 'unverified'}</span>
+                  </div>
+                  <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                    Laborer: <span className="font-medium text-gray-900">{user.verification?.laborer || 'unverified'}</span>
+                  </div>
+                  {sessionUser?.isSuperAdmin && !user.isSuperAdmin ? (
+                    <button
+                      disabled={Boolean(user.pendingDeleteAt)}
+                      onClick={() =>
+                        void handleAction(
+                          () => updateAdminUserAccess(user.id, !user.isAdmin),
+                          !user.isAdmin ? 'Admin access granted.' : 'Admin access removed.',
+                        )
+                      }
+                      className={`rounded-xl px-4 py-3 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
+                        user.isAdmin
+                          ? 'bg-red-50 text-red-700 hover:bg-red-100'
+                          : 'bg-green-50 text-green-700 hover:bg-green-100'
+                      }`}
+                    >
+                      {user.isAdmin ? 'Remove Admin' : 'Grant Admin'}
+                    </button>
+                  ) : null}
+                  {!user.isSuperAdmin ? (
+                    <button
+                      disabled={Boolean(user.pendingDeleteAt)}
+                      onClick={() => setSelectedPenaltyUser(user)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Gavel className="h-4 w-4" />
+                      <span>Penalty</span>
+                    </button>
+                  ) : null}
+                  {isSuperAdminUser(sessionUser) && !user.isSuperAdmin ? (
+                    <button
+                      disabled={Boolean(user.pendingDeleteAt)}
+                      onClick={() => {
+                        setSelectedAccountActionUser(user);
+                        setAccountActionReason(user.disabledReason || '');
+                      }}
+                      className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      <span>Account Actions</span>
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </div>
+            {user.pendingDeleteAt ? (
+              <p className="mt-3 text-sm text-gray-500">
+                Permanent delete will take effect after all active booking links are cleared.
+              </p>
+            ) : null}
           </div>
         ))}
       </div>
@@ -753,9 +810,9 @@ export function AdminDashboard() {
               </p>
             </div>
             <div className="flex items-center gap-3">
-              <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
-                ${listing.price}/{listing.unit}
-              </div>
+                <div className="rounded-xl bg-gray-50 px-4 py-3 text-sm text-gray-700">
+                  {formatPhpRate(listing.price, listing.unit, { shortHour: true })}
+                </div>
               <button
                 onClick={() =>
                   void handleAction(
@@ -778,57 +835,105 @@ export function AdminDashboard() {
     <SectionCard title="Labor Bookings" subtitle="Review and update active or historical worker bookings.">
       <div className="space-y-4">
         {(adminData?.laborBookings || []).map((booking: any) => (
-          <div key={booking.id} className="flex flex-col gap-4 rounded-2xl border border-gray-100 p-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="font-semibold text-gray-900">
-                {booking.type || 'Farm task'} • {booking.workerName}
-              </p>
-              <p className="text-sm text-gray-500">
-                {booking.date} • {booking.time || 'No time set'} • {booking.location || 'No location'}
-              </p>
-              <p className="mt-1 text-sm text-gray-500">
-                Buyer/worker ref: {booking.worker || booking.workerName} • Status: {booking.status}
+          <div
+            key={booking.id}
+            className="grid gap-4 rounded-2xl border border-gray-200 p-4 transition-colors hover:border-green-500 lg:grid-cols-[minmax(0,1.45fr)_minmax(220px,0.8fr)_220px] lg:items-center"
+          >
+            <div className="min-w-0">
+              <div className="mb-3 flex flex-wrap items-start gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-100">
+                  <User className="h-5 w-5 text-green-600" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="font-semibold text-gray-900">{booking.workerName}</h4>
+                  <p className="text-sm text-gray-600">{booking.type || 'Farm task'}</p>
+                </div>
+                <span
+                  className={`rounded-full px-2 py-1 text-xs font-medium ${
+                    booking.status === 'completed'
+                      ? 'bg-green-100 text-green-700'
+                      : booking.status === 'cancelled'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-yellow-100 text-yellow-700'
+                  }`}
+                >
+                  {booking.status}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 text-sm text-gray-600 md:grid-cols-2">
+                <div className="flex items-center">
+                  <Calendar className="mr-2 h-4 w-4" />
+                  <span>{booking.date || 'No date set'}</span>
+                </div>
+                <div className="flex items-start">
+                  <MapPin className="mr-2 mt-0.5 h-4 w-4 shrink-0" />
+                  <span className="min-w-0">{booking.location || 'No location'}</span>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-gray-500">
+                Buyer/worker ref: {booking.worker || booking.workerName}
               </p>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="grid min-w-0 gap-3 rounded-2xl bg-gray-50 p-4 text-sm text-gray-600">
+              <div className="rounded-xl border border-white/70 bg-white/90 px-3 py-3">
+                <p className="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Schedule</p>
+                <div className="mt-2 flex items-center">
+                  <Clock className="mr-2 h-4 w-4 shrink-0" />
+                  <span>{booking.time || 'No time set'}{booking.duration ? ` (${booking.duration})` : ''}</span>
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/70 bg-white/90 px-3 py-3">
+                <p className="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Rate</p>
+                <p className="mt-2 font-medium text-green-600">
+                  {Number.isFinite(Number(booking.rate))
+                    ? formatPhpRate(booking.rate, 'hour', { shortHour: true })
+                    : 'Rate unavailable'}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-col justify-center gap-3 lg:items-stretch">
               {booking.status !== 'completed' ? (
                 <button
                   onClick={() =>
                     void handleAction(
-                      () =>
-                        updateAdminLaborBooking(
-                          booking.userId,
-                          booking.bookingType,
-                          booking.bookingIndex,
-                          'completed',
-                        ),
-                      'Labor booking marked completed.',
-                    )
+                        () =>
+                          updateAdminLaborBooking(
+                            booking.userId,
+                            booking.bookingType,
+                            booking.bookingIndex,
+                            'completed',
+                    ),
+                    'Labor booking marked completed.',
+                  )
                   }
-                  className="rounded-xl bg-green-50 px-4 py-3 text-sm font-medium text-green-700 hover:bg-green-100"
+                  className="min-h-[52px] w-full rounded-xl bg-green-50 px-4 py-3 text-sm font-medium text-green-700 hover:bg-green-100"
                 >
                   Mark Completed
                 </button>
-              ) : null}
+              ) : (
+                <div className="hidden min-h-[52px] lg:block" />
+              )}
               {booking.status !== 'cancelled' ? (
                 <button
                   onClick={() =>
-                    void handleAction(
-                      () =>
-                        updateAdminLaborBooking(
-                          booking.userId,
-                          booking.bookingType,
-                          booking.bookingIndex,
-                          'cancelled',
-                        ),
-                      'Labor booking cancelled.',
-                    )
+                      void handleAction(
+                        () =>
+                          updateAdminLaborBooking(
+                            booking.userId,
+                            booking.bookingType,
+                            booking.bookingIndex,
+                            'cancelled',
+                    ),
+                    'Labor booking cancelled.',
+                  )
                   }
-                  className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="min-h-[52px] w-full rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   Cancel
                 </button>
-              ) : null}
+              ) : (
+                <div className="hidden min-h-[52px] lg:block" />
+              )}
             </div>
           </div>
         ))}
@@ -948,6 +1053,12 @@ export function AdminDashboard() {
                   <p className="text-xs font-medium uppercase text-gray-500">ID Number</p>
                   <p className="mt-1 text-sm text-gray-900">{selectedVerification.details?.idNumber || 'Not provided'}</p>
                 </div>
+                {selectedVerification.details?.profileAddress ? (
+                  <div className="rounded-xl bg-white px-4 py-3 shadow-sm md:col-span-2 xl:col-span-3">
+                    <p className="text-xs font-medium uppercase text-gray-500">Profile Address</p>
+                    <p className="mt-1 text-sm text-gray-900">{selectedVerification.details.profileAddress}</p>
+                  </div>
+                ) : null}
                 {selectedVerification.details?.farmProofType ? (
                   <div className="rounded-xl bg-white px-4 py-3 shadow-sm">
                     <p className="text-xs font-medium uppercase text-gray-500">Farm Proof Type</p>
@@ -1105,43 +1216,47 @@ export function AdminDashboard() {
             </div>
           </div>
         </div>
-      ) : null}
-      <div className="space-y-4">
-        {filteredVerifications.map((item: any) => (
-          <div key={item.id} className="rounded-2xl border border-gray-100 p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <p className="font-semibold text-gray-900">{item.userName}</p>
-                <p className="text-sm text-gray-500">
-                  {item.userEmail} • {item.role} • status: {item.status}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {(item.documents || []).map((document: any) => (
-                    <span key={document.id} className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700">
-                      {document.type}: {document.originalName}
-                    </span>
-                  ))}
+        ) : null}
+        <div className="space-y-4">
+          {filteredVerifications.map((item: any) => (
+            <div
+              key={item.id}
+              className="grid gap-3 rounded-2xl border border-gray-100 px-4 py-3 transition-colors hover:border-green-200 xl:grid-cols-[minmax(0,1.7fr)_220px_220px_180px] xl:items-stretch"
+            >
+              <div className="min-w-0 self-center">
+                <div className="flex flex-wrap items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-semibold text-gray-900">{item.userName}</p>
+                    <p className="text-sm text-gray-500">
+                      {item.userEmail} • {item.role} • status: {item.status}
+                    </p>
+                  </div>
                 </div>
-                {item.details?.idType ? (
-                  <p className="mt-3 text-sm text-gray-500">
-                    ID: {item.details.idType} • No.: {item.details.idNumber}
-                  </p>
-                ) : null}
-                {item.submittedAt ? (
-                  <p className="mt-1 text-sm text-gray-500">
-                    Submitted: {new Date(item.submittedAt).toLocaleString()}
-                  </p>
-                ) : null}
                 {item.reviewReason ? (
-                  <p className="mt-1 text-sm text-red-600">
+                  <p className="mt-2 text-sm text-red-600">
                     Rejection reason: {item.reviewReason}
                   </p>
                 ) : null}
               </div>
-              <div className="flex flex-wrap gap-3">
+              <div className="flex min-w-0 flex-col justify-center rounded-xl border border-gray-100 bg-gray-50 px-3 py-2.5 text-sm text-gray-600">
+                <p className="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Identity</p>
+                <p className="mt-1 text-sm text-gray-700">
+                  {item.details?.idType ? `ID: ${item.details.idType}` : 'ID not provided'}
+                </p>
+                <p className="mt-1 text-sm text-gray-500">
+                  {item.details?.idNumber ? `No. ${item.details.idNumber}` : 'ID number not provided'}
+                </p>
+              </div>
+              <div className="flex min-w-0 flex-col justify-center rounded-xl border border-gray-100 bg-gray-50 px-3 py-2.5 text-sm text-gray-600">
+                <p className="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Submitted</p>
+                <p className="mt-1 text-sm text-gray-700">
+                  {item.submittedAt ? new Date(item.submittedAt).toLocaleString() : 'Not available'}
+                </p>
+              </div>
+              <div className="flex flex-col justify-center gap-1.5 self-center">
                 <button
                   onClick={() => setSelectedVerificationId(selectedVerificationId === item.id ? null : item.id)}
-                  className="rounded-xl border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
                 >
                   {selectedVerificationId === item.id ? 'Hide Details' : 'View Details'}
                 </button>
@@ -1151,27 +1266,30 @@ export function AdminDashboard() {
                       void handleAction(
                         () => updateAdminVerificationStatus(item.userId, item.role, 'verified'),
                         `${item.role} verification approved.`,
-                      )
-                    }
-                    className="rounded-xl bg-green-50 px-4 py-3 text-sm font-medium text-green-700 hover:bg-green-100"
-                  >
-                    Approve
-                  </button>
-                ) : null}
-                {item.status !== 'unverified' ? (
-                  <button
-                    onClick={() => setSelectedVerificationId(item.id)}
-                    className="rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100"
-                  >
-                    Reject
-                  </button>
-                ) : null}
-              </div>
+                        )
+                      }
+                      className="min-h-[44px] w-full rounded-xl bg-green-50 px-4 py-2.5 text-sm font-medium text-green-700 hover:bg-green-100"
+                    >
+                      Approve
+                    </button>
+                  ) : (
+                    <div className="hidden lg:block" />
+                  )}
+                  {item.status !== 'unverified' ? (
+                    <button
+                      onClick={() => setSelectedVerificationId(item.id)}
+                      className="min-h-[44px] w-full rounded-xl bg-red-50 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-100"
+                    >
+                      Reject
+                    </button>
+                  ) : (
+                    <div className="hidden lg:block" />
+                  )}
+                </div>
             </div>
-          </div>
-        ))}
-      </div>
-    </SectionCard>
+          ))}
+        </div>
+      </SectionCard>
   );
 
   const content = {
@@ -1356,6 +1474,94 @@ export function AdminDashboard() {
                 />
                 <p className="mt-2 text-xs text-gray-500">
                   `warned` shows a notice, while `restricted` and `suspended` remove marketplace, labor, and service access.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {selectedAccountActionUser ? (
+          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              onClick={() => setSelectedAccountActionUser(null)}
+            />
+            <div className="relative z-10 w-full max-w-xl rounded-3xl border border-gray-100 bg-white p-6 shadow-2xl">
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Trash2 className="h-5 w-5 text-slate-700" />
+                    <h3 className="text-lg font-semibold text-gray-900">Account Actions</h3>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-500">
+                    {selectedAccountActionUser.name} · {selectedAccountActionUser.email}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setSelectedAccountActionUser(null)}
+                  className="rounded-xl p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                >
+                  <XCircle className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4 rounded-2xl border border-gray-100 bg-gray-50/70 p-4">
+                {selectedAccountActionUser.accountStatus !== 'disabled'
+                && !selectedAccountActionUser.pendingDisableAt ? (
+                  <textarea
+                    value={accountActionReason}
+                    onChange={(event) => setAccountActionReason(event.target.value)}
+                    placeholder="Optional reason for disabling the account"
+                    className="min-h-24 w-full rounded-xl border border-gray-200 px-3 py-3 text-sm focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
+                  />
+                ) : null}
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    onClick={() => {
+                      const isDisabledAccount =
+                        selectedAccountActionUser.accountStatus === 'disabled';
+                      const isPendingDisable = Boolean(selectedAccountActionUser.pendingDisableAt);
+
+                      void handleAction(
+                        () =>
+                          isDisabledAccount || isPendingDisable
+                            ? restoreAdminUser(selectedAccountActionUser.id)
+                            : disableAdminUser(selectedAccountActionUser.id, accountActionReason),
+                        isDisabledAccount || isPendingDisable
+                          ? 'User account restored.'
+                          : 'User account disabled.',
+                      );
+                      setSelectedAccountActionUser(null);
+                    }}
+                    className={`flex-1 rounded-xl px-4 py-3 text-sm font-medium ${
+                      selectedAccountActionUser.accountStatus === 'disabled' || selectedAccountActionUser.pendingDisableAt
+                        ? 'bg-green-50 text-green-700 hover:bg-green-100'
+                        : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
+                    }`}
+                  >
+                    {selectedAccountActionUser.accountStatus === 'disabled' || selectedAccountActionUser.pendingDisableAt
+                      ? 'Lift Disable'
+                      : 'Disable Account'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      void handleAction(
+                        () => permanentlyDeleteAdminUser(selectedAccountActionUser.id),
+                        'User account permanently deleted.',
+                      );
+                      setSelectedAccountActionUser(null);
+                    }}
+                    className="flex-1 rounded-xl bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100"
+                  >
+                    Permanently Delete
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500">
+                  {selectedAccountActionUser.accountStatus === 'disabled'
+                    ? 'Restore makes the account active again, and its marketplace, labor, and service visibility will return automatically.'
+                    : selectedAccountActionUser.pendingDisableAt
+                      ? 'Lift Disable cancels the queued disable before it takes effect.'
+                      : 'Disable keeps the user record in the database and blocks access. Permanently delete removes the account record from the database.'}
                 </p>
               </div>
             </div>

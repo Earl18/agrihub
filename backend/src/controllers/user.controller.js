@@ -1,6 +1,9 @@
 import { User } from '../models/User.js';
 import { appendActivity, getUserActivities } from '../utils/activityLog.js';
-import { sendEmailChangeVerificationCode } from '../utils/mailer.js';
+import {
+  sendEmailChangeVerificationCode,
+  sendPhoneVerificationCodeEmail,
+} from '../utils/mailer.js';
 import {
   canManageCommercialFeatures,
   ensurePrivilegedAccess,
@@ -39,6 +42,15 @@ async function sanitizeProfile(profile) {
   }
 }
 
+function buildPhoneVerificationState(user) {
+  return {
+    status: user?.phoneVerification?.status === 'verified' ? 'verified' : 'unverified',
+    source: user?.phoneVerification?.source || 'email',
+    verifiedAt: user?.phoneVerification?.verifiedAt || null,
+    requestedAt: user?.phoneVerification?.requestedAt || null,
+  };
+}
+
 async function sanitizeUser(user) {
   return {
     id: user._id.toString(),
@@ -67,6 +79,13 @@ async function sanitizeUser(user) {
           requestedAt: user.emailVerification?.requestedAt || null,
         }
       : null,
+    phoneChangePending: user?.phoneVerification?.pendingPhone
+      ? {
+          phone: user.phoneVerification.pendingPhone,
+          requestedAt: user?.phoneVerification?.requestedAt || null,
+        }
+      : null,
+    phoneVerification: buildPhoneVerificationState(user),
     penalty: getPenaltyState(user),
     canManageCommercialFeatures: canManageCommercialFeatures(user),
     profile: await sanitizeProfile(user.profile),
@@ -98,8 +117,183 @@ function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function normalizeExperienceYears(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  return digits;
+}
+
+function formatExperienceYears(value) {
+  const normalized = normalizeExperienceYears(value);
+  return normalized ? `${normalized} years` : '';
+}
+
+function formatPhpCurrency(value) {
+  const parsed = Number(value || 0);
+
+  return new Intl.NumberFormat('en-PH', {
+    style: 'currency',
+    currency: 'PHP',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number.isFinite(parsed) ? parsed : 0);
+}
+
+function formatPhpRate(value, unit = 'hour') {
+  return `${formatPhpCurrency(value)}/${unit === 'hour' ? 'hr' : unit}`;
+}
+
+function normalizePhilippinePhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+
+  if (digits.startsWith('639') && digits.length === 12) {
+    return `0${digits.slice(2)}`;
+  }
+
+  if (digits.startsWith('09') && digits.length === 11) {
+    return digits;
+  }
+
+  return digits;
+}
+
+function isValidPhilippineMobile(phone) {
+  return /^09\d{9}$/.test(phone);
+}
+
+async function issuePhoneVerificationCode(user, phone) {
+  const normalizedPhone = normalizePhilippinePhone(phone);
+
+  if (!normalizedPhone || !isValidPhilippineMobile(normalizedPhone)) {
+    throw new Error('Please enter a valid Philippine mobile number.');
+  }
+
+  const code = buildEmailVerificationCode();
+  const { now, expiresAt } = buildVerificationWindow();
+
+  user.phone = normalizedPhone;
+  user.phoneVerification = {
+    status: 'unverified',
+    source: 'email',
+    code,
+    expiresAt,
+    requestedAt: now,
+    verifiedAt: null,
+    pendingPhone: normalizedPhone,
+  };
+
+  await user.save();
+  await sendPhoneVerificationCodeEmail({
+    toEmail: user.email,
+    code,
+    name: user.name,
+    phone: normalizedPhone,
+  });
+
+  return {
+    now,
+    normalizedPhone,
+  };
+}
+
+function buildVerificationProfileAddress(profile = {}) {
+  const directAddress = String(profile?.address || '').trim();
+
+  if (directAddress) {
+    return directAddress;
+  }
+
+  return [profile?.streetAddress, profile?.city, profile?.state, profile?.country]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
+function normalizeProvinceToken(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\bprovince\b/g, '')
+    .replace(/\bcity\b/g, '')
+    .replace(/\bmunicipality\b/g, '')
+    .replace(/\bmetro\b/g, '')
+    .replace(/[0-9]/g, ' ')
+    .replace(/[^a-z\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildProvinceCandidates(profile = {}) {
+  const candidates = new Set();
+  const pushCandidate = (value) => {
+    const normalized = normalizeProvinceToken(value);
+
+    if (!normalized) {
+      return;
+    }
+
+    candidates.add(normalized);
+
+    const parts = normalized
+      .split(/[\s/-]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (parts.length > 1) {
+      const trailing = parts[parts.length - 1];
+
+      if (trailing.length >= 3) {
+        candidates.add(trailing);
+      }
+    }
+  };
+
+  pushCandidate(profile?.state);
+
+  [profile?.city, profile?.address, profile?.location, profile?.streetAddress]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .forEach((value) => {
+      value
+        .split(',')
+        .map((segment) => segment.trim())
+        .filter(Boolean)
+        .forEach(pushCandidate);
+    });
+
+  return candidates;
+}
+
+function getPrimaryProvinceLabel(profile = {}) {
+  const directState = normalizeProvinceToken(profile?.state);
+
+  if (directState) {
+    return directState
+      .split(' ')
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
+  const firstCandidate = Array.from(buildProvinceCandidates(profile))[0] || '';
+
+  return firstCandidate
+    .split(' ')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function belongsToSameProvince(currentProfile = {}, workerProfile = {}) {
+  const currentCandidates = buildProvinceCandidates(currentProfile);
+  const workerCandidates = buildProvinceCandidates(workerProfile);
+
+  if (currentCandidates.size === 0 || workerCandidates.size === 0) {
+    return false;
+  }
+
+  return Array.from(currentCandidates).some((candidate) => workerCandidates.has(candidate));
+}
+
 function getProfileStats(user) {
   const verification = getVerificationState(user);
+  const primaryLaborListing = getLaborListings(user)[0];
   const listings = user.marketplaceListings || [];
   const activeJobs = Array.isArray(user.laborProfile?.activeBookings)
     ? user.laborProfile.activeBookings.length
@@ -107,8 +301,8 @@ function getProfileStats(user) {
   const completedJobs = Array.isArray(user.laborProfile?.bookingHistory)
     ? user.laborProfile.bookingHistory.filter((booking) => booking?.status === 'completed').length
     : 0;
-  const laborRate = Number(user.laborProfile?.rate || 0);
-  const laborAvailability = String(user.laborProfile?.availability || 'Unavailable').trim() || 'Unavailable';
+  const laborRate = Number(primaryLaborListing?.rate || 0);
+  const laborAvailability = String(primaryLaborListing?.availability || 'Unavailable').trim() || 'Unavailable';
   const laborRating = Number(user.laborProfile?.rating || 0);
   const totalSales = listings.reduce(
     (sum, listing) => sum + Number(listing.price || 0) * Number(listing.orders || 0),
@@ -122,7 +316,7 @@ function getProfileStats(user) {
   const stats = [
     {
       label: 'Total Purchases',
-      value: `$${totalPurchases.toLocaleString()}`,
+      value: formatPhpCurrency(totalPurchases),
       color: 'text-blue-600',
     },
     {
@@ -140,7 +334,7 @@ function getProfileStats(user) {
   if (verification.seller === 'verified') {
     stats.unshift({
       label: 'Total Sales',
-      value: `$${totalSales.toLocaleString()}`,
+      value: formatPhpCurrency(totalSales),
       color: 'text-green-600',
     });
   }
@@ -148,7 +342,7 @@ function getProfileStats(user) {
   if (verification.laborer === 'verified') {
     stats.push({
       label: 'Labor Rate',
-      value: `$${laborRate}/hr`,
+      value: formatPhpRate(laborRate),
       color: 'text-emerald-600',
     });
     stats.push({
@@ -174,6 +368,225 @@ function getProfileStats(user) {
   }
 
   return stats;
+}
+
+function normalizeLaborSkills(skills) {
+  if (!Array.isArray(skills)) {
+    return [];
+  }
+
+  return skills
+    .map((skill) => String(skill || '').trim())
+    .filter(Boolean);
+}
+
+function normalizeClockTime(value) {
+  const normalized = String(value || '').trim();
+
+  if (!/^\d{2}:\d{2}$/.test(normalized)) {
+    return '';
+  }
+
+  const [hours, minutes] = normalized.split(':').map(Number);
+
+  if (!Number.isInteger(hours) || !Number.isInteger(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    return '';
+  }
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function convertClockTimeToMinutes(value) {
+  const normalized = normalizeClockTime(value);
+
+  if (!normalized) {
+    return null;
+  }
+
+  const [hours, minutes] = normalized.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function formatWorkingHoursRange(start, end) {
+  const normalizedStart = normalizeClockTime(start);
+  const normalizedEnd = normalizeClockTime(end);
+
+  if (!normalizedStart || !normalizedEnd) {
+    return '';
+  }
+
+  const [startHours, startMinutes] = normalizedStart.split(':').map(Number);
+  const [endHours, endMinutes] = normalizedEnd.split(':').map(Number);
+  const formatOptions = { hour: 'numeric', minute: '2-digit' };
+  const startLabel = new Date(2000, 0, 1, startHours, startMinutes).toLocaleTimeString('en-US', formatOptions);
+  const endLabel = new Date(2000, 0, 1, endHours, endMinutes).toLocaleTimeString('en-US', formatOptions);
+
+  return `${startLabel} - ${endLabel}`;
+}
+
+function getDurationHours(value) {
+  const match = String(value || '').trim().match(/^(\d+)\s*hour/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function buildLaborBookingId() {
+  return `LB-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+}
+
+function normalizeCoordinates(coordinates = {}) {
+  const lat = Number(coordinates?.lat);
+  const lng = Number(coordinates?.lng);
+
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return {
+      lat: null,
+      lng: null,
+    };
+  }
+
+  return {
+    lat,
+    lng,
+  };
+}
+
+function createTravelTrackingSnapshot(travelTracking = {}) {
+  return {
+    isOnTheWay: Boolean(travelTracking?.isOnTheWay),
+    startedAt: travelTracking?.startedAt || null,
+    updatedAt: travelTracking?.updatedAt || null,
+    currentLocation: normalizeCoordinates(travelTracking?.currentLocation),
+  };
+}
+
+function getCurrentManilaDateString() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Manila',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function getVerifiedLaborSkills(user) {
+  return normalizeLaborSkills(user?.verification?.laborer?.details?.skills);
+}
+
+function normalizeLaborOffer(offer) {
+  return {
+    title: String(offer?.title || '').trim(),
+    description: String(offer?.description || '').trim(),
+    workerType: String(offer?.workerType || '').trim(),
+    rate: Number(offer?.rate || 0),
+    availability: String(offer?.availability || '').trim() || 'Unavailable',
+    skills: normalizeLaborSkills(offer?.skills),
+    distance: String(offer?.distance || '').trim(),
+    serviceArea: String(offer?.serviceArea || '').trim(),
+    workingHoursStart: normalizeClockTime(offer?.workingHoursStart),
+    workingHoursEnd: normalizeClockTime(offer?.workingHoursEnd),
+    isPublished: Boolean(offer?.isPublished),
+  };
+}
+
+function getLaborListings(user) {
+  const rawListings = Array.isArray(user?.laborProfile?.listings) ? user.laborProfile.listings : [];
+
+  if (rawListings.length > 0) {
+    return rawListings
+      .map(normalizeLaborOffer)
+      .filter((listing) => listing.workerType);
+  }
+
+  const legacyOffer = normalizeLaborOffer(user?.laborProfile);
+
+  if (!legacyOffer.workerType) {
+    return [];
+  }
+
+  return laborOfferIsComplete(user, legacyOffer) ? [legacyOffer] : [];
+}
+
+function laborOfferIsComplete(user, offer) {
+  const normalizedOffer = normalizeLaborOffer(offer);
+
+  return Boolean(
+    normalizedOffer.title &&
+    normalizedOffer.description &&
+    normalizedOffer.workerType &&
+    normalizedOffer.rate > 0 &&
+    normalizedOffer.availability &&
+    normalizedOffer.skills.length > 0 &&
+    normalizedOffer.workingHoursStart &&
+    normalizedOffer.workingHoursEnd &&
+    String(user?.profile?.experience || '').trim() &&
+    String(user?.profile?.location || '').trim() &&
+    String(user?.phone || '').trim(),
+  );
+}
+
+function syncPrimaryLaborProfileFromListings(user) {
+  const listings = getLaborListings(user);
+  const primaryListing = listings[0];
+
+  if (!primaryListing) {
+    user.laborProfile.title = '';
+    user.laborProfile.description = '';
+    user.laborProfile.workerType = '';
+    user.laborProfile.rate = 0;
+    user.laborProfile.availability = 'Available';
+    user.laborProfile.skills = [];
+    user.laborProfile.distance = '';
+    user.laborProfile.serviceArea = '';
+    user.laborProfile.workingHoursStart = '';
+    user.laborProfile.workingHoursEnd = '';
+    user.laborProfile.isPublished = false;
+    return;
+  }
+
+  user.laborProfile.title = primaryListing.title;
+  user.laborProfile.description = primaryListing.description;
+  user.laborProfile.workerType = primaryListing.workerType;
+  user.laborProfile.rate = primaryListing.rate;
+  user.laborProfile.availability = primaryListing.availability;
+  user.laborProfile.skills = primaryListing.skills;
+  user.laborProfile.distance = primaryListing.distance;
+  user.laborProfile.serviceArea = primaryListing.serviceArea;
+  user.laborProfile.workingHoursStart = primaryListing.workingHoursStart;
+  user.laborProfile.workingHoursEnd = primaryListing.workingHoursEnd;
+  user.laborProfile.isPublished = primaryListing.isPublished;
+}
+
+function buildLaborOfferPayload(user) {
+  const listings = getLaborListings(user);
+  const primaryListing = listings[0];
+  const verifiedSkills = getVerifiedLaborSkills(user);
+
+  return {
+    title: primaryListing?.title || '',
+    description: primaryListing?.description || '',
+    workerType: primaryListing?.workerType || '',
+    rate: Number(primaryListing?.rate || 0),
+    availability: primaryListing?.availability || 'Unavailable',
+    skills: primaryListing?.skills || [],
+    verifiedSkills,
+    distance: primaryListing?.distance || '',
+    serviceArea: primaryListing?.serviceArea || '',
+    workingHoursStart: primaryListing?.workingHoursStart || '',
+    workingHoursEnd: primaryListing?.workingHoursEnd || '',
+    workingHoursLabel: formatWorkingHoursRange(primaryListing?.workingHoursStart, primaryListing?.workingHoursEnd),
+    rating: Number(user?.laborProfile?.rating || 0),
+    isPublished: Boolean(primaryListing?.isPublished),
+    listings,
+    experience: formatExperienceYears(user.profile?.experience || ''),
+    location: user.profile?.location || '',
+    phone: user.phone || '',
+  };
 }
 
 export async function getCurrentUser(req, res) {
@@ -232,8 +645,39 @@ export async function updateCurrentUser(req, res, next) {
       }
     }
 
+    let phoneVerificationTriggered = false;
+    let profileMessage = 'Profile updated successfully.';
+
     if (typeof phone === 'string') {
-      req.user.phone = nextPhone;
+      const normalizedPhone = normalizePhilippinePhone(nextPhone);
+      const currentPhone = normalizePhilippinePhone(req.user.phone || '');
+
+      if (normalizedPhone && !isValidPhilippineMobile(normalizedPhone)) {
+        return res.status(400).json({
+          message: 'Please enter a valid Philippine mobile number.',
+        });
+      }
+
+      if (normalizedPhone !== currentPhone) {
+        if (!normalizedPhone) {
+          req.user.phone = '';
+          req.user.phoneVerification = {
+            status: 'unverified',
+            source: 'email',
+            code: '',
+            expiresAt: null,
+            requestedAt: null,
+            verifiedAt: null,
+            pendingPhone: '',
+          };
+          profileMessage = 'Profile updated successfully. Your phone number has been cleared.';
+        } else {
+          await issuePhoneVerificationCode(req.user, normalizedPhone);
+          phoneVerificationTriggered = true;
+          profileMessage =
+            'Profile updated successfully. We sent a verification code to your email to verify the new phone number.';
+        }
+      }
     }
 
     if (typeof profile.avatarPath === 'string' && profile.avatarPath.trim()) {
@@ -265,7 +709,7 @@ export async function updateCurrentUser(req, res, next) {
     await req.user.save();
 
     res.json({
-      message: 'Profile updated successfully.',
+      message: profileMessage,
       user: await sanitizeUser(req.user),
     });
   } catch (error) {
@@ -334,6 +778,118 @@ export async function requestEmailChange(req, res, next) {
       message: 'A verification code was sent to your new email address.',
       pendingEmail: nextEmail,
       requestedAt: now.toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function requestPhoneChange(req, res, next) {
+  try {
+    const requestedPhone = normalizePhilippinePhone(String(req.body?.phone || req.user.phone || '').trim());
+
+    if (!requestedPhone) {
+      return res.status(400).json({
+        message: 'Enter a phone number first.',
+      });
+    }
+
+    if (!isValidPhilippineMobile(requestedPhone)) {
+      return res.status(400).json({
+        message: 'Please enter a valid Philippine mobile number.',
+      });
+    }
+
+    const { now, normalizedPhone } = await issuePhoneVerificationCode(req.user, requestedPhone);
+
+    appendActivity(req.user, {
+      description: `Requested phone verification for ${normalizedPhone}`,
+      status: 'pending',
+      createdAt: now,
+    });
+    await req.user.save();
+
+    return res.json({
+      message: 'A verification code was sent to your email for the selected phone number.',
+      pendingPhone: normalizedPhone,
+      requestedAt: now.toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function verifyPhoneChange(req, res, next) {
+  try {
+    const phone = normalizePhilippinePhone(String(req.body?.phone || '').trim());
+    const code = String(req.body?.code || '').trim();
+    const pendingPhone = normalizePhilippinePhone(req.user.phoneVerification?.pendingPhone || req.user.phone || '');
+
+    if (!phone || !code) {
+      return res.status(400).json({
+        message: 'Phone number and verification code are required.',
+      });
+    }
+
+    if (!pendingPhone || phone !== pendingPhone) {
+      return res.status(400).json({
+        message: 'There is no pending verification for that phone number.',
+      });
+    }
+
+    if (
+      !req.user.phoneVerification?.code ||
+      req.user.phoneVerification.code !== code ||
+      !req.user.phoneVerification.expiresAt ||
+      new Date(req.user.phoneVerification.expiresAt).getTime() <= Date.now()
+    ) {
+      return res.status(400).json({
+        message: 'The verification code is invalid or has expired.',
+      });
+    }
+
+    req.user.phone = pendingPhone;
+    req.user.phoneVerification = {
+      status: 'verified',
+      source: 'email',
+      code: '',
+      expiresAt: null,
+      requestedAt: req.user.phoneVerification?.requestedAt || null,
+      verifiedAt: new Date(),
+      pendingPhone: '',
+    };
+
+    appendActivity(req.user, {
+      description: `Verified phone number ${pendingPhone}`,
+      status: 'completed',
+    });
+    await req.user.save();
+
+    return res.json({
+      message: 'Phone number verified successfully.',
+      user: await sanitizeUser(req.user),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function cancelPhoneChange(req, res, next) {
+  try {
+    req.user.phoneVerification = {
+      status: 'unverified',
+      source: 'email',
+      code: '',
+      expiresAt: null,
+      requestedAt: null,
+      verifiedAt: null,
+      pendingPhone: '',
+    };
+    await req.user.save();
+
+    return res.json({
+      message: 'Phone verification request cancelled.',
+      user: await sanitizeUser(req.user),
     });
   } catch (error) {
     next(error);
@@ -415,6 +971,12 @@ export async function applyForRole(req, res, next) {
       });
     }
 
+    if (req.user.phoneVerification?.status !== 'verified' || !String(req.user.phone || '').trim()) {
+      return res.status(403).json({
+        message: 'Verify your phone number first before booking a laborer.',
+      });
+    }
+
     if (!Array.isArray(req.user.roles) || req.user.roles.length === 0) {
       req.user.roles = ['buyer'];
     }
@@ -441,6 +1003,8 @@ export async function applyForRole(req, res, next) {
         message: 'Please complete all identity and consent confirmations before submitting verification.',
       });
     }
+
+    const profileAddress = buildVerificationProfileAddress(req.user.profile);
 
     if (role === 'seller') {
       const sellerDocumentTypes = new Set(documents.map((document) => document?.type));
@@ -490,6 +1054,7 @@ export async function applyForRole(req, res, next) {
           idType: details.idType,
           idNumber,
           farmProofType: details.farmProofType,
+          profileAddress,
           addressConfirmed: Boolean(details.addressConfirmed),
           selfieConfirmed: Boolean(details.selfieConfirmed),
           riskAccepted: Boolean(details.riskAccepted),
@@ -529,7 +1094,9 @@ export async function applyForRole(req, res, next) {
         });
       }
 
-      if (!String(application.experience || '').trim()) {
+      const normalizedExperience = normalizeExperienceYears(application.experience || '');
+
+      if (!normalizedExperience) {
         return res.status(400).json({
           message: 'Laborer KYC requires your work experience.',
         });
@@ -559,20 +1126,20 @@ export async function applyForRole(req, res, next) {
           idType: details.idType,
           idNumber,
           farmProofType: '',
+          profileAddress,
           addressConfirmed: Boolean(details.addressConfirmed),
           selfieConfirmed: Boolean(details.selfieConfirmed),
           riskAccepted: Boolean(details.riskAccepted),
           consentAccepted: Boolean(details.consentAccepted),
-          experience: String(application.experience || '').trim(),
+          experience: normalizedExperience,
           description: String(application.description || '').trim(),
           laborProofType: details.laborProofType,
           skills: application.skills,
         },
       };
-      req.user.laborProfile.workerType = application.skills[0];
       req.user.laborProfile.skills = application.skills;
       req.user.laborProfile.availability = req.user.laborProfile.availability || 'Available';
-      req.user.profile.experience = String(application.experience || '').trim() || req.user.profile.experience;
+      req.user.profile.experience = normalizedExperience || req.user.profile.experience;
       req.user.profile.specialization = String(application.description || '').trim() || req.user.profile.specialization;
     }
 
@@ -750,54 +1317,195 @@ export async function getMarketplaceData(req, res, next) {
 
 export async function getLaborData(req, res, next) {
   try {
-    const laborers = await User.find(roleQuery('laborer'));
-    const availableLaborers = laborers.filter((laborer) => canManageCommercialFeatures(laborer));
-    const currentUserActiveBookings = Array.isArray(req.user?.laborBookings?.activeBookings)
-      ? req.user.laborBookings.activeBookings
-      : [];
-    const currentUserBookingHistory = Array.isArray(req.user?.laborBookings?.bookingHistory)
-      ? req.user.laborBookings.bookingHistory
+      const currentUser = req.user || null;
+      const laborers = await User.find(roleQuery('laborer'));
+      const viewerProvince = getPrimaryProvinceLabel(currentUser?.profile);
+      const currentUserActiveBookings = Array.isArray(currentUser?.laborBookings?.activeBookings)
+        ? currentUser.laborBookings.activeBookings
+        : [];
+    const currentUserBookingHistory = Array.isArray(currentUser?.laborBookings?.bookingHistory)
+      ? currentUser.laborBookings.bookingHistory
       : [];
 
     res.json({
-      availableWorkers: availableLaborers.map((laborer) => ({
-        id: laborer._id.toString(),
-        name: laborer.name,
-        type: laborer.laborProfile.workerType,
-        rating: laborer.laborProfile.rating,
-        experience: laborer.profile.experience,
-        rate: laborer.laborProfile.rate,
-        availability: laborer.laborProfile.availability,
-        skills: laborer.laborProfile.skills,
-        distance: laborer.laborProfile.distance,
+        availableWorkers: laborers.flatMap((laborer) =>
+          getLaborListings(laborer)
+            .filter(
+                (listing) =>
+                  canManageCommercialFeatures(laborer) &&
+                  listing.isPublished &&
+                  laborOfferIsComplete(laborer, listing) &&
+                  (!currentUser || belongsToSameProvince(currentUser?.profile, laborer?.profile)),
+              )
+              .map((listing) => ({
+              id: `${laborer._id.toString()}-${listing.workerType}`,
+            workerId: laborer._id.toString(),
+            name: laborer.name,
+            title: listing.title,
+            description: listing.description,
+            type: listing.workerType,
+            rating: laborer.laborProfile.rating,
+            experience: formatExperienceYears(laborer.profile.experience),
+            rate: listing.rate,
+            availability: listing.availability,
+            skills: listing.skills,
+            distance: listing.distance,
+            serviceArea: listing.serviceArea,
+            location: laborer.profile.location,
+            email: laborer.email,
+            phone: laborer.phone,
+            workingHoursStart: listing.workingHoursStart,
+              workingHoursEnd: listing.workingHoursEnd,
+              workingHoursLabel: formatWorkingHoursRange(listing.workingHoursStart, listing.workingHoursEnd),
+            })),
+        ),
+        viewerProvince,
+        activeBookings: currentUserActiveBookings.map((booking, bookingIndex) => ({
+          id: `my-active-${bookingIndex}`,
+          ...(booking.toObject?.() || booking),
       })),
-      activeBookings: currentUserActiveBookings.map((booking, bookingIndex) => ({
-        id: `my-active-${bookingIndex}`,
-        ...(booking.toObject?.() || booking),
-      })),
-      bookingHistory: currentUserBookingHistory.map((booking, bookingIndex) => ({
-        id: `my-history-${bookingIndex}`,
-        ...(booking.toObject?.() || booking),
-      })),
-      canOfferLabor: hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user),
-      myLaborProfile: hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user)
-        ? {
-            workerType: req.user.laborProfile.workerType,
-            rate: req.user.laborProfile.rate,
-            availability: req.user.laborProfile.availability,
-            skills: req.user.laborProfile.skills,
-            distance: req.user.laborProfile.distance,
-            rating: req.user.laborProfile.rating,
-          }
-        : null,
-      myActiveJobs:
-        hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user)
-          ? req.user.laborProfile.activeBookings || []
-          : [],
-      myJobHistory:
-        hasRole(req.user, 'laborer') && canManageCommercialFeatures(req.user)
-          ? req.user.laborProfile.bookingHistory || []
-          : [],
+        bookingHistory: currentUserBookingHistory.map((booking, bookingIndex) => ({
+          id: `my-history-${bookingIndex}`,
+          ...(booking.toObject?.() || booking),
+        })),
+        canOfferLabor: hasRole(currentUser, 'laborer') && canManageCommercialFeatures(currentUser),
+        myLaborProfile: hasRole(currentUser, 'laborer') && canManageCommercialFeatures(currentUser)
+          ? buildLaborOfferPayload(currentUser)
+          : null,
+        myActiveJobs:
+          hasRole(currentUser, 'laborer') && canManageCommercialFeatures(currentUser)
+            ? currentUser.laborProfile.activeBookings || []
+            : [],
+        myJobHistory:
+          hasRole(currentUser, 'laborer') && canManageCommercialFeatures(currentUser)
+            ? currentUser.laborProfile.bookingHistory || []
+            : [],
+      });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function upsertLaborOffer(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: 'Authentication required.',
+      });
+    }
+
+    if (!hasRole(req.user, 'laborer')) {
+      return res.status(403).json({
+        message: 'Only laborers can create labor offers.',
+      });
+    }
+
+    if (!canManageCommercialFeatures(req.user)) {
+      return res.status(403).json({
+        message: 'This account is currently restricted from marketplace and workforce actions.',
+      });
+    }
+
+    const workerType = String(req.body?.workerType || '').trim();
+    const description = String(req.body?.description || '').trim();
+    const availability = String(req.body?.availability || '').trim();
+    const location = String(req.body?.location || '').trim();
+    const experience = normalizeExperienceYears(req.body?.experience || '');
+    const phone = String(req.body?.phone || '').trim();
+    const rate = Number(req.body?.rate);
+    const workingHoursStart = normalizeClockTime(req.body?.workingHoursStart);
+    const workingHoursEnd = normalizeClockTime(req.body?.workingHoursEnd);
+    const verifiedSkills = getVerifiedLaborSkills(req.user);
+    const existingListings = getLaborListings(req.user);
+    const matchedListingIndex = existingListings.findIndex((listing) => listing.workerType === workerType);
+    const title = workerType ? `${workerType} Labor` : '';
+
+    if (verifiedSkills.length === 0) {
+      return res.status(400).json({
+        message: 'No verified labor skills were found for this account.',
+      });
+    }
+
+    if (!workerType) {
+      return res.status(400).json({
+        message: 'Choose which labor you will provide from your verified skills.',
+      });
+    }
+
+    if (!verifiedSkills.includes(workerType)) {
+      return res.status(400).json({
+        message: 'The selected labor must match one of your verified skills.',
+      });
+    }
+
+    if (
+      !title ||
+      !workerType ||
+      !description ||
+      !availability ||
+      !location ||
+      !experience ||
+      !phone ||
+      !workingHoursStart ||
+      !workingHoursEnd ||
+      !Number.isFinite(rate) ||
+      rate <= 0
+    ) {
+      return res.status(400).json({
+        message:
+          'Labor type, description, rate, availability, working hours, address verification, experience, and phone are required.',
+      });
+    }
+
+    if (convertClockTimeToMinutes(workingHoursStart) >= convertClockTimeToMinutes(workingHoursEnd)) {
+      return res.status(400).json({
+        message: 'Working hours end time must be later than the start time.',
+      });
+    }
+
+    const hadExistingOffer = matchedListingIndex >= 0;
+    const nextListing = {
+      title,
+      workerType,
+      description,
+      rate,
+      availability,
+      skills: verifiedSkills,
+      distance: '',
+      serviceArea: '',
+      workingHoursStart,
+      workingHoursEnd,
+      isPublished: true,
+    };
+
+    req.user.phone = phone;
+    req.user.profile.location = location;
+    req.user.profile.experience = experience;
+
+    if (!Array.isArray(req.user.laborProfile.listings)) {
+      req.user.laborProfile.listings = [];
+    }
+
+    if (matchedListingIndex >= 0) {
+      req.user.laborProfile.listings[matchedListingIndex] = nextListing;
+    } else {
+      req.user.laborProfile.listings.push(nextListing);
+    }
+
+    syncPrimaryLaborProfileFromListings(req.user);
+
+    appendActivity(req.user, {
+      description: hadExistingOffer
+        ? `Updated labor offer: ${title}`
+        : `Created labor offer: ${title}`,
+      status: 'confirmed',
+    });
+
+    await req.user.save();
+
+    res.json({
+      message: 'Labor offer saved successfully.',
+      laborOffer: buildLaborOfferPayload(req.user),
     });
   } catch (error) {
     next(error);
@@ -819,14 +1527,15 @@ export async function createLaborBooking(req, res, next) {
     }
 
     const workerId = String(req.body?.workerId || '').trim();
+    const workerType = String(req.body?.workerType || '').trim();
     const date = String(req.body?.date || '').trim();
     const time = String(req.body?.time || '').trim();
     const duration = String(req.body?.duration || '').trim();
     const location = String(req.body?.location || '').trim();
 
-    if (!workerId || !date || !time || !duration || !location) {
+    if (!workerId || !workerType || !date || !time || !duration || !location) {
       return res.status(400).json({
-        message: 'Worker, date, time, duration, and location are required.',
+        message: 'Worker, labor type, date, time, duration, and location are required.',
       });
     }
 
@@ -835,25 +1544,68 @@ export async function createLaborBooking(req, res, next) {
       ...roleQuery('laborer'),
     });
 
-    if (!worker || !canManageCommercialFeatures(worker)) {
+    const selectedListing = getLaborListings(worker).find((listing) => listing.workerType === workerType);
+
+    if (
+      !worker ||
+      !selectedListing ||
+      !canManageCommercialFeatures(worker) ||
+      !selectedListing.isPublished ||
+      !laborOfferIsComplete(worker, selectedListing)
+    ) {
       return res.status(404).json({
         message: 'Selected worker is not available for booking.',
       });
     }
 
-    const numericRate = Number(worker.laborProfile?.rate || req.body?.rate || 0);
+    const numericRate = Number(selectedListing.rate || req.body?.rate || 0);
     const durationHours = parseInt(duration, 10);
     const bookingCost = Number.isFinite(durationHours) && durationHours > 0
       ? numericRate * durationHours
       : numericRate;
     const bookingType = String(
-      req.body?.type || worker.laborProfile?.workerType || worker.profile?.specialization || 'Labor',
+      req.body?.type || selectedListing.workerType || worker.profile?.specialization || 'Labor',
     ).trim();
+    const bookingId = buildLaborBookingId();
     const buyerName = String(req.user.name || '').trim() || 'Authenticated User';
+    const buyerEmail = String(req.user.email || '').trim().toLowerCase();
+    const buyerPhone = String(req.user.phone || '').trim();
+    const requestedTimeMinutes = convertClockTimeToMinutes(time);
+    const workingHoursStartMinutes = convertClockTimeToMinutes(selectedListing.workingHoursStart);
+    const workingHoursEndMinutes = convertClockTimeToMinutes(selectedListing.workingHoursEnd);
+    const durationHoursValue = getDurationHours(duration);
+
+    if (
+      requestedTimeMinutes === null ||
+      workingHoursStartMinutes === null ||
+      workingHoursEndMinutes === null
+    ) {
+      return res.status(400).json({
+        message:
+          workingHoursStartMinutes === null || workingHoursEndMinutes === null
+            ? 'This labor listing does not have a valid working-hours schedule yet.'
+            : 'Enter a valid booking time within the laborer’s working hours.',
+      });
+    }
+
+    if (requestedTimeMinutes < workingHoursStartMinutes || requestedTimeMinutes > workingHoursEndMinutes) {
+      return res.status(400).json({
+        message: `Bookings for this laborer are only available from ${formatWorkingHoursRange(selectedListing.workingHoursStart, selectedListing.workingHoursEnd)}.`,
+      });
+    }
+
+    if (durationHoursValue !== null && requestedTimeMinutes + durationHoursValue * 60 > workingHoursEndMinutes) {
+      return res.status(400).json({
+        message: `This booking extends past the laborer's working hours of ${formatWorkingHoursRange(selectedListing.workingHoursStart, selectedListing.workingHoursEnd)}.`,
+      });
+    }
 
     const buyerBooking = {
+      bookingId,
       worker: worker.name,
       workerId: worker._id.toString(),
+      workerEmail: String(worker.email || '').trim().toLowerCase(),
+      workerPhone: String(worker.phone || '').trim(),
       type: bookingType,
       date,
       time,
@@ -864,6 +1616,9 @@ export async function createLaborBooking(req, res, next) {
       cost: bookingCost,
       bookedByUserId: req.user._id.toString(),
       bookedByName: buyerName,
+      bookedByEmail: buyerEmail,
+      bookedByPhone: buyerPhone,
+      travelTracking: createTravelTrackingSnapshot(),
     };
 
     const workerBooking = {
@@ -898,6 +1653,264 @@ export async function createLaborBooking(req, res, next) {
     res.status(201).json({
       message: 'Worker booked successfully.',
       booking: buyerBooking,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function markLaborBookingOnTheWay(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: 'Authentication required.',
+      });
+    }
+
+    if (!hasRole(req.user, 'laborer')) {
+      return res.status(403).json({
+        message: 'Only laborers can update travel tracking for labor bookings.',
+      });
+    }
+
+    const bookingId = String(req.params?.bookingId || req.body?.bookingId || '').trim();
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+
+    if (!bookingId) {
+      return res.status(400).json({
+        message: 'A booking reference is required.',
+      });
+    }
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({
+        message: 'A valid current location is required to start travel tracking.',
+      });
+    }
+
+    const activeBookings = Array.isArray(req.user?.laborProfile?.activeBookings)
+      ? req.user.laborProfile.activeBookings
+      : [];
+    const bookingIndex = activeBookings.findIndex((booking) => String(booking?.bookingId || '').trim() === bookingId);
+
+    if (bookingIndex < 0) {
+      return res.status(404).json({
+        message: 'That active labor booking could not be found on this worker account.',
+      });
+    }
+
+    const workerBooking = activeBookings[bookingIndex];
+
+    if (String(workerBooking?.date || '').trim() !== getCurrentManilaDateString()) {
+      return res.status(400).json({
+        message: 'Travel tracking can only be started on the actual booking day.',
+      });
+    }
+
+    const buyerUserId = String(workerBooking?.bookedByUserId || '').trim();
+    const buyer = buyerUserId ? await User.findById(buyerUserId) : null;
+
+    if (!buyer) {
+      return res.status(404).json({
+        message: 'The client account for this booking could not be found.',
+      });
+    }
+
+    const buyerActiveBookings = Array.isArray(buyer?.laborBookings?.activeBookings)
+      ? buyer.laborBookings.activeBookings
+      : [];
+    const buyerBookingIndex = buyerActiveBookings.findIndex((booking) => String(booking?.bookingId || '').trim() === bookingId);
+
+    if (buyerBookingIndex < 0) {
+      return res.status(404).json({
+        message: 'The mirrored client booking record could not be found.',
+      });
+    }
+
+    const now = new Date();
+    const nextTravelTracking = createTravelTrackingSnapshot({
+      ...(workerBooking?.travelTracking?.toObject?.() || workerBooking?.travelTracking || {}),
+      isOnTheWay: true,
+      startedAt: workerBooking?.travelTracking?.startedAt || now,
+      updatedAt: now,
+      currentLocation: {
+        lat,
+        lng,
+      },
+    });
+
+    req.user.laborProfile.activeBookings[bookingIndex] = {
+      ...(workerBooking.toObject?.() || workerBooking),
+      status: 'on_the_way',
+      travelTracking: nextTravelTracking,
+    };
+
+    buyer.laborBookings.activeBookings[buyerBookingIndex] = {
+      ...(buyerActiveBookings[buyerBookingIndex].toObject?.() || buyerActiveBookings[buyerBookingIndex]),
+      status: 'on_the_way',
+      travelTracking: nextTravelTracking,
+    };
+
+    await Promise.all([req.user.save(), buyer.save()]);
+
+    res.json({
+      message: 'Travel tracking is now live for this booking.',
+      booking: buyer.laborBookings.activeBookings[buyerBookingIndex],
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function cancelLaborBooking(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: 'Authentication required.',
+      });
+    }
+
+    const bookingId = String(req.params?.bookingId || req.body?.bookingId || '').trim();
+
+    if (!bookingId) {
+      return res.status(400).json({
+        message: 'A booking reference is required.',
+      });
+    }
+
+    const buyerActiveBookings = Array.isArray(req.user?.laborBookings?.activeBookings)
+      ? req.user.laborBookings.activeBookings
+      : [];
+    const workerActiveBookings = Array.isArray(req.user?.laborProfile?.activeBookings)
+      ? req.user.laborProfile.activeBookings
+      : [];
+
+    const buyerBookingIndex = buyerActiveBookings.findIndex(
+      (booking) => String(booking?.bookingId || '').trim() === bookingId,
+    );
+    const workerBookingIndex = workerActiveBookings.findIndex(
+      (booking) => String(booking?.bookingId || '').trim() === bookingId,
+    );
+
+    const isBuyerCancelling = buyerBookingIndex >= 0;
+    const isWorkerCancelling = workerBookingIndex >= 0;
+
+    if (!isBuyerCancelling && !isWorkerCancelling) {
+      return res.status(404).json({
+        message: 'That active labor booking could not be found on this account.',
+      });
+    }
+
+    const sourceBooking = isBuyerCancelling
+      ? buyerActiveBookings[buyerBookingIndex]
+      : workerActiveBookings[workerBookingIndex];
+
+    const counterpartUserId = isBuyerCancelling
+      ? String(sourceBooking?.workerId || '').trim()
+      : String(sourceBooking?.bookedByUserId || '').trim();
+
+    const counterpartUser = counterpartUserId ? await User.findById(counterpartUserId) : null;
+
+    if (!counterpartUser) {
+      return res.status(404).json({
+        message: isBuyerCancelling
+          ? 'The worker account for this booking could not be found.'
+          : 'The client account for this booking could not be found.',
+      });
+    }
+
+    const counterpartActiveBookings = isBuyerCancelling
+      ? Array.isArray(counterpartUser?.laborProfile?.activeBookings)
+        ? counterpartUser.laborProfile.activeBookings
+        : []
+      : Array.isArray(counterpartUser?.laborBookings?.activeBookings)
+        ? counterpartUser.laborBookings.activeBookings
+        : [];
+
+    const counterpartBookingIndex = counterpartActiveBookings.findIndex(
+      (booking) => String(booking?.bookingId || '').trim() === bookingId,
+    );
+
+    if (counterpartBookingIndex < 0) {
+      return res.status(404).json({
+        message: 'The mirrored booking record could not be found.',
+      });
+    }
+
+    const cancelledAt = new Date();
+    const nextCancelledBooking = {
+      ...(sourceBooking.toObject?.() || sourceBooking),
+      status: 'cancelled',
+      cancelledAt,
+      travelTracking: createTravelTrackingSnapshot(sourceBooking?.travelTracking),
+    };
+    const nextCounterpartCancelledBooking = {
+      ...(counterpartActiveBookings[counterpartBookingIndex].toObject?.() || counterpartActiveBookings[counterpartBookingIndex]),
+      status: 'cancelled',
+      cancelledAt,
+      travelTracking: createTravelTrackingSnapshot(counterpartActiveBookings[counterpartBookingIndex]?.travelTracking),
+    };
+
+    if (!req.user.laborBookings) {
+      req.user.laborBookings = {
+        activeBookings: [],
+        bookingHistory: [],
+      };
+    }
+
+    if (!req.user.laborProfile) {
+      req.user.laborProfile = {
+        activeBookings: [],
+        bookingHistory: [],
+      };
+    }
+
+    if (isBuyerCancelling) {
+      req.user.laborBookings.activeBookings = buyerActiveBookings.filter((_, index) => index !== buyerBookingIndex);
+      req.user.laborBookings.bookingHistory = [
+        ...(Array.isArray(req.user.laborBookings.bookingHistory) ? req.user.laborBookings.bookingHistory : []),
+        nextCancelledBooking,
+      ];
+
+      counterpartUser.laborProfile.activeBookings = counterpartActiveBookings.filter(
+        (_, index) => index !== counterpartBookingIndex,
+      );
+      counterpartUser.laborProfile.bookingHistory = [
+        ...(Array.isArray(counterpartUser?.laborProfile?.bookingHistory) ? counterpartUser.laborProfile.bookingHistory : []),
+        nextCounterpartCancelledBooking,
+      ];
+    } else {
+      req.user.laborProfile.activeBookings = workerActiveBookings.filter((_, index) => index !== workerBookingIndex);
+      req.user.laborProfile.bookingHistory = [
+        ...(Array.isArray(req.user.laborProfile.bookingHistory) ? req.user.laborProfile.bookingHistory : []),
+        nextCancelledBooking,
+      ];
+
+      counterpartUser.laborBookings.activeBookings = counterpartActiveBookings.filter(
+        (_, index) => index !== counterpartBookingIndex,
+      );
+      counterpartUser.laborBookings.bookingHistory = [
+        ...(Array.isArray(counterpartUser?.laborBookings?.bookingHistory) ? counterpartUser.laborBookings.bookingHistory : []),
+        nextCounterpartCancelledBooking,
+      ];
+    }
+
+    appendActivity(req.user, {
+      description: `Cancelled labor booking ${bookingId}`,
+      status: 'cancelled',
+    });
+
+    appendActivity(counterpartUser, {
+      description: `Labor booking ${bookingId} was cancelled`,
+      status: 'cancelled',
+    });
+
+    await Promise.all([req.user.save(), counterpartUser.save()]);
+
+    res.json({
+      message: 'Labor booking cancelled successfully.',
+      booking: isBuyerCancelling ? nextCancelledBooking : nextCounterpartCancelledBooking,
     });
   } catch (error) {
     next(error);

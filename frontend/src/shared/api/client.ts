@@ -1,3 +1,5 @@
+import { clearSession } from '../auth/session';
+
 const defaultBaseUrl = 'http://localhost:8000/api/v1';
 
 export const API_BASE_URL =
@@ -35,6 +37,20 @@ export async function apiRequest<T>(
       rawMessage.startsWith('Route not found:')
         ? 'This feature is not available right now. Please try again in a moment.'
         : rawMessage;
+
+    if (message === 'This account has been disabled. Please contact support.') {
+      clearSession();
+
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        const loginUrl = new URL('/login', window.location.origin);
+        loginUrl.searchParams.set(
+          'message',
+          'Your account has been disabled. Please contact support.',
+        );
+        window.location.assign(loginUrl.toString());
+      }
+    }
+
     throw new Error(message);
   }
 

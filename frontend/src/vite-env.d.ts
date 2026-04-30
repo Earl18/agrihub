@@ -20,6 +20,23 @@ interface Window {
         ) => void;
         prompt: () => void;
       };
+      oauth2: {
+        initTokenClient: (config: {
+          client_id: string;
+          callback: (response: {
+            access_token?: string;
+            error?: string;
+            error_description?: string;
+            scope?: string;
+          }) => void;
+          scope: string;
+          prompt?: string;
+          login_hint?: string;
+          error_callback?: (error: { type?: string }) => void;
+        }) => {
+          requestAccessToken: () => void;
+        };
+      };
     };
     maps?: {
       places?: {

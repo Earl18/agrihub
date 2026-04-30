@@ -124,6 +124,10 @@ export function hasActivePenalty(user, ...statuses) {
   return new Date(penalty.expiresAt).getTime() > Date.now();
 }
 
+export function isAccountActive(user) {
+  return (user?.accountStatus || 'active') !== 'disabled';
+}
+
 export function canManageCommercialFeatures(user) {
-  return !hasActivePenalty(user, 'restricted', 'suspended');
+  return isAccountActive(user) && !hasActivePenalty(user, 'restricted', 'suspended');
 }

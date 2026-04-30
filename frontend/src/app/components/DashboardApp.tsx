@@ -6,7 +6,7 @@ import { Marketplace } from './Marketplace';
 import { LaborManagement } from './LaborManagement';
 import { ServicesBooking } from './ServicesBooking';
 import { Profile } from './Profile';
-import { createLaborBooking } from '../../features/app/api';
+import { createLaborBooking, getLaborData } from '../../features/app/api';
 import { Notifications } from './Notifications';
 import { Cart, CartItem } from './Cart';
 import { Receipt, ReceiptData } from './Receipt';
@@ -22,10 +22,16 @@ import {
 } from '../../shared/auth/session';
 import {
   AppNotification,
+  addStoredNotification,
+  clearStoredNotifications,
+  deleteStoredNotification,
+  getNotificationsUpdatedEventName,
   getStoredNotifications,
-  saveNotifications,
+  markStoredNotificationRead,
+  upsertStoredNotifications,
 } from '../../shared/notifications/store';
 import { addStoredActivity } from '../../shared/activity/store';
+import { formatPhpCurrency } from '../../shared/format/currency';
 
 type TabType = 'dashboard' | 'marketplace' | 'labor' | 'services' | 'profile';
 
@@ -39,6 +45,242 @@ function getTabFromSearchParams(searchParams: URLSearchParams): TabType {
   }
 
   return 'dashboard';
+}
+
+function buildSessionNotifications(sessionUser: ReturnType<typeof getSessionUser>) {
+  if (!sessionUser?.id) {
+    return [] as Array<{
+      sourceKey: string;
+      type: 'success' | 'warning' | 'info';
+      title: string;
+      message: string;
+      createdAt?: string;
+    }>;
+  }
+
+  const notifications: Array<{
+    sourceKey: string;
+    type: 'success' | 'warning' | 'info';
+    title: string;
+    message: string;
+    createdAt?: string;
+  }> = [];
+
+  if (sessionUser.penalty?.status && sessionUser.penalty.status !== 'good') {
+    notifications.push({
+      sourceKey: `session-penalty-${sessionUser.penalty.status}-${sessionUser.penalty.reason || ''}-${sessionUser.penalty.expiresAt || ''}`,
+      type: 'warning',
+      title: `Account ${sessionUser.penalty.status}`,
+      message: sessionUser.penalty.reason || 'An admin applied an account penalty that affects your access.',
+      createdAt: sessionUser.penalty.penalizedAt || undefined,
+    });
+  }
+
+  if (sessionUser.emailChangePending?.email) {
+    notifications.push({
+      sourceKey: `session-email-change-${sessionUser.emailChangePending.email}`,
+      type: 'info',
+      title: 'Email change pending',
+      message: `Verify ${sessionUser.emailChangePending.email} to finish updating your account email.`,
+      createdAt: sessionUser.emailChangePending.requestedAt || undefined,
+    });
+  }
+
+  if (sessionUser.phoneChangePending?.phone) {
+    notifications.push({
+      sourceKey: `session-phone-change-${sessionUser.phoneChangePending.phone}`,
+      type: 'info',
+      title: 'Phone verification pending',
+      message: `Enter the verification code sent for ${sessionUser.phoneChangePending.phone} to confirm your phone number.`,
+      createdAt: sessionUser.phoneChangePending.requestedAt || undefined,
+    });
+  }
+
+  if (sessionUser.phone && sessionUser.phoneVerification?.status !== 'verified') {
+    notifications.push({
+      sourceKey: `session-phone-unverified-${sessionUser.phone}`,
+      type: 'warning',
+      title: 'Phone number not verified',
+      message: 'Verify your phone number in Profile before booking laborers.',
+      createdAt: sessionUser.phoneVerification?.requestedAt || undefined,
+    });
+  }
+
+  if (sessionUser.verification?.seller === 'pending') {
+    notifications.push({
+      sourceKey: 'session-seller-verification-pending',
+      type: 'info',
+      title: 'Seller verification pending',
+      message: 'Your seller KYC submission is waiting for admin review.',
+    });
+  }
+
+  if (sessionUser.verification?.seller === 'verified') {
+    notifications.push({
+      sourceKey: 'session-seller-verification-verified',
+      type: 'success',
+      title: 'Seller verified',
+      message: 'Your seller account is verified and ready for marketplace listings.',
+    });
+  }
+
+  if (sessionUser.verification?.seller === 'unverified' && sessionUser.verificationMeta?.seller?.reviewReason) {
+    notifications.push({
+      sourceKey: `session-seller-verification-rejected-${sessionUser.verificationMeta.seller.rejectedAt || sessionUser.verificationMeta.seller.reviewReason}`,
+      type: 'warning',
+      title: 'Seller verification needs attention',
+      message: sessionUser.verificationMeta.seller.reviewReason,
+      createdAt: sessionUser.verificationMeta.seller.rejectedAt || undefined,
+    });
+  }
+
+  if (sessionUser.verification?.laborer === 'pending') {
+    notifications.push({
+      sourceKey: 'session-laborer-verification-pending',
+      type: 'info',
+      title: 'Laborer verification pending',
+      message: 'Your laborer KYC submission is waiting for admin review.',
+    });
+  }
+
+  if (sessionUser.verification?.laborer === 'verified') {
+    notifications.push({
+      sourceKey: 'session-laborer-verification-verified',
+      type: 'success',
+      title: 'Laborer verified',
+      message: 'Your laborer account is verified and visible for booking.',
+    });
+  }
+
+  if (sessionUser.verification?.laborer === 'unverified' && sessionUser.verificationMeta?.laborer?.reviewReason) {
+    notifications.push({
+      sourceKey: `session-laborer-verification-rejected-${sessionUser.verificationMeta.laborer.rejectedAt || sessionUser.verificationMeta.laborer.reviewReason}`,
+      type: 'warning',
+      title: 'Laborer verification needs attention',
+      message: sessionUser.verificationMeta.laborer.reviewReason,
+      createdAt: sessionUser.verificationMeta.laborer.rejectedAt || undefined,
+    });
+  }
+
+  return notifications;
+}
+
+function buildLaborNotifications(payload: any) {
+  const notifications: Array<{
+    sourceKey: string;
+    type: 'success' | 'warning' | 'info';
+    title: string;
+    message: string;
+    createdAt?: string;
+  }> = [];
+
+  const activeBookings = Array.isArray(payload?.activeBookings) ? payload.activeBookings : [];
+  const bookingHistory = Array.isArray(payload?.bookingHistory) ? payload.bookingHistory : [];
+  const myActiveJobs = Array.isArray(payload?.myActiveJobs) ? payload.myActiveJobs : [];
+  const myJobHistory = Array.isArray(payload?.myJobHistory) ? payload.myJobHistory : [];
+
+  activeBookings.forEach((booking: any) => {
+    const bookingKey = String(booking?.bookingId || booking?.id || '').trim();
+
+    if (!bookingKey) {
+      return;
+    }
+
+    if (booking.status === 'on_the_way') {
+      notifications.push({
+        sourceKey: `labor-booking-${bookingKey}-on-the-way`,
+        type: 'info',
+        title: 'Worker is on the way',
+        message: `${booking.worker} is travelling to your farm for ${booking.date} at ${booking.time}.`,
+        createdAt: booking.travelTracking?.updatedAt || booking.travelTracking?.startedAt,
+      });
+      return;
+    }
+
+    notifications.push({
+      sourceKey: `labor-booking-${bookingKey}-${booking.status || 'confirmed'}`,
+      type: 'info',
+      title: 'Active labor booking',
+      message: `${booking.worker} is booked for ${booking.date} at ${booking.time}.`,
+    });
+  });
+
+  bookingHistory.forEach((booking: any) => {
+    const bookingKey = String(booking?.bookingId || booking?.id || '').trim();
+
+    if (!bookingKey) {
+      return;
+    }
+
+    if (booking.status === 'cancelled') {
+      notifications.push({
+        sourceKey: `labor-booking-history-${bookingKey}-cancelled`,
+        type: 'warning',
+        title: 'Labor booking cancelled',
+        message: `${booking.worker} booking on ${booking.date} was cancelled.`,
+        createdAt: booking.cancelledAt || undefined,
+      });
+    }
+
+    if (booking.status === 'completed') {
+      notifications.push({
+        sourceKey: `labor-booking-history-${bookingKey}-completed`,
+        type: 'success',
+        title: 'Labor booking completed',
+        message: `${booking.worker} completed the booking scheduled on ${booking.date}.`,
+        createdAt: booking.completedAt || undefined,
+      });
+    }
+  });
+
+  myActiveJobs.forEach((job: any) => {
+    const bookingKey = String(job?.bookingId || job?.id || '').trim();
+
+    if (!bookingKey) {
+      return;
+    }
+
+    notifications.push({
+      sourceKey: `labor-job-${bookingKey}-${job.status || 'confirmed'}`,
+      type: job.status === 'on_the_way' ? 'success' : 'info',
+      title: job.status === 'on_the_way' ? 'Travel tracking is live' : 'Upcoming job assignment',
+      message:
+        job.status === 'on_the_way'
+          ? `Your client can now track you for the ${job.date} booking.`
+          : `${job.worker} booked you for ${job.date} at ${job.time}.`,
+      createdAt: job.travelTracking?.updatedAt || job.travelTracking?.startedAt,
+    });
+  });
+
+  myJobHistory.forEach((job: any) => {
+    const bookingKey = String(job?.bookingId || job?.id || '').trim();
+
+    if (!bookingKey) {
+      return;
+    }
+
+    if (job.status === 'cancelled') {
+      notifications.push({
+        sourceKey: `labor-job-history-${bookingKey}-cancelled`,
+        type: 'warning',
+        title: 'Job assignment cancelled',
+        message: `${job.worker} cancelled the ${job.date} booking.`,
+        createdAt: job.cancelledAt || undefined,
+      });
+    }
+
+    if (job.status === 'completed') {
+      notifications.push({
+        sourceKey: `labor-job-history-${bookingKey}-completed`,
+        type: 'success',
+        title: 'Job assignment completed',
+        message: `You completed the ${job.date} labor booking successfully.`,
+        createdAt: job.completedAt || undefined,
+      });
+    }
+  });
+
+  return notifications;
 }
 
 export function DashboardApp() {
@@ -77,18 +319,19 @@ export function DashboardApp() {
   }, [activeTab, searchParams]);
 
   useEffect(() => {
-    setNotifications(getStoredNotifications());
+    setNotifications(sessionUser?.id ? getStoredNotifications(sessionUser.id) : []);
 
     const handleNotificationsUpdated = () => {
-      setNotifications(getStoredNotifications());
+      const nextUser = getSessionUser();
+      setNotifications(nextUser?.id ? getStoredNotifications(nextUser.id) : []);
     };
 
-    window.addEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+    window.addEventListener(getNotificationsUpdatedEventName(), handleNotificationsUpdated);
 
     return () => {
-      window.removeEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+      window.removeEventListener(getNotificationsUpdatedEventName(), handleNotificationsUpdated);
     };
-  }, []);
+  }, [sessionUser?.id]);
 
   useEffect(() => {
     const syncSession = () => {
@@ -101,6 +344,36 @@ export function DashboardApp() {
       window.removeEventListener(getSessionUpdatedEventName(), syncSession);
     };
   }, []);
+
+  useEffect(() => {
+    if (!sessionUser?.id) {
+      setNotifications([]);
+      return;
+    }
+
+    upsertStoredNotifications(sessionUser.id, buildSessionNotifications(sessionUser));
+  }, [sessionUser]);
+
+  useEffect(() => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    const syncLaborNotifications = () => {
+      getLaborData()
+        .then((payload) => {
+          upsertStoredNotifications(sessionUser.id, buildLaborNotifications(payload));
+        })
+        .catch(() => undefined);
+    };
+
+    syncLaborNotifications();
+    window.addEventListener('agrihub:labor-bookings-updated', syncLaborNotifications);
+
+    return () => {
+      window.removeEventListener('agrihub:labor-bookings-updated', syncLaborNotifications);
+    };
+  }, [sessionUser?.id]);
 
   const updateActiveTab = (tab: TabType) => {
     setActiveTab(tab);
@@ -121,35 +394,36 @@ export function DashboardApp() {
     return false;
   };
 
-  const handleMarkAsRead = (id: number) => {
-    const nextNotifications = notifications.map((notification) =>
-      notification.id === id ? { ...notification, read: true } : notification,
-    );
-    setNotifications(nextNotifications);
-    saveNotifications(nextNotifications);
+  const handleMarkAsRead = (id: string) => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    markStoredNotificationRead(sessionUser.id, id);
   };
 
-  const handleDeleteNotification = (id: number) => {
-    const nextNotifications = notifications.filter((notification) => notification.id !== id);
-    setNotifications(nextNotifications);
-    saveNotifications(nextNotifications);
+  const handleDeleteNotification = (id: string) => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    deleteStoredNotification(sessionUser.id, id);
   };
 
   const handleClearAllNotifications = () => {
-    setNotifications([]);
-    saveNotifications([]);
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    clearStoredNotifications(sessionUser.id);
   };
 
-  const addNotification = (notification: Omit<AppNotification, 'id' | 'read' | 'time'>) => {
-    const newNotification: AppNotification = {
-      ...notification,
-      id: Date.now(),
-      read: false,
-      time: 'Just now',
-    };
-    const nextNotifications = [newNotification, ...notifications];
-    setNotifications(nextNotifications);
-    saveNotifications(nextNotifications);
+  const addNotification = (notification: Omit<AppNotification, 'id' | 'read' | 'createdAt'> & { createdAt?: string; sourceKey?: string }) => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    addStoredNotification(sessionUser.id, notification);
   };
 
   const handleAddToCart = (product: any) => {
@@ -206,12 +480,25 @@ export function DashboardApp() {
     setCartOpen(false);
     setReceiptOpen(true);
     setCartItems([]);
-    addNotification({ type: 'success', title: 'Order Placed Successfully', message: `Your order of $${total.toFixed(2)} has been placed` });
-    logActivity(`Placed a marketplace order worth $${total.toFixed(2)}`, 'completed');
+    addNotification({ type: 'success', title: 'Order Placed Successfully', message: `Your order of ${formatPhpCurrency(total)} has been placed` });
+    logActivity(`Placed a marketplace order worth ${formatPhpCurrency(total)}`, 'completed');
   };
 
   const handleBookWorker = (worker: any) => {
     if (!requireLogin('labor')) {
+      return;
+    }
+
+    if (
+      sessionUser?.phoneVerification?.status !== 'verified'
+      || !String(sessionUser?.phone || '').trim()
+    ) {
+      addNotification({
+        type: 'warning',
+        title: 'Phone Verification Required',
+        message: 'Verify your phone number in your profile before booking a laborer.',
+      });
+      updateActiveTab('profile');
       return;
     }
 
@@ -238,7 +525,8 @@ export function DashboardApp() {
     try {
       if (bookingType === 'labor') {
         await createLaborBooking({
-          workerId: bookingItem.id,
+          workerId: bookingItem.workerId,
+          workerType: bookingItem.type,
           date: bookingData.date,
           time: bookingData.time,
           duration: bookingData.duration,

@@ -28,6 +28,29 @@ export function verifyCurrentUserEmailChange(email: string, code: string) {
   });
 }
 
+export function requestCurrentUserPhoneChange(phone: string) {
+  return apiRequest<{ message: string; pendingPhone: string; requestedAt: string }>(
+    '/data/me/phone-change/request',
+    {
+      method: 'POST',
+      body: { phone },
+    },
+  );
+}
+
+export function verifyCurrentUserPhoneChange(phone: string, code: string) {
+  return apiRequest<{ message: string; user: any }>('/data/me/phone-change/verify', {
+    method: 'POST',
+    body: { phone, code },
+  });
+}
+
+export function cancelCurrentUserPhoneChange() {
+  return apiRequest<{ message: string; user: any }>('/data/me/phone-change/cancel', {
+    method: 'POST',
+  });
+}
+
 export function getDashboardData() {
   return apiRequest<any>('/data/dashboard');
 }
@@ -42,6 +65,7 @@ export function getLaborData() {
 
 export function createLaborBooking(payload: {
   workerId: string;
+  workerType: string;
   date: string;
   time: string;
   duration: string;
@@ -49,6 +73,44 @@ export function createLaborBooking(payload: {
 }) {
   return apiRequest<{ message: string; booking: any }>('/data/labor/book', {
     method: 'POST',
+    body: payload,
+  });
+}
+
+export function markLaborBookingOnTheWay(
+  bookingId: string,
+  payload: {
+    lat: number;
+    lng: number;
+  },
+) {
+  return apiRequest<{ message: string; booking: any }>(`/data/labor/book/${bookingId}/on-the-way`, {
+    method: 'PATCH',
+    body: payload,
+  });
+}
+
+export function cancelLaborBooking(bookingId: string) {
+  return apiRequest<{ message: string; booking: any }>(`/data/labor/book/${bookingId}/cancel`, {
+    method: 'PATCH',
+  });
+}
+
+export function upsertLaborOffer(payload: {
+  title: string;
+  workerType: string;
+  description: string;
+  rate: number;
+  availability: string;
+  skills: string[];
+  location: string;
+  experience: string;
+  phone: string;
+  workingHoursStart: string;
+  workingHoursEnd: string;
+}) {
+  return apiRequest<{ message: string; laborOffer: any }>('/data/labor/offer', {
+    method: 'PUT',
     body: payload,
   });
 }
@@ -100,6 +162,25 @@ export function updateAdminUserAccess(userId: string, admin: boolean) {
   return apiRequest<any>(`/admin/users/${userId}/access`, {
     method: 'PATCH',
     body: { admin },
+  });
+}
+
+export function disableAdminUser(userId: string, reason?: string) {
+  return apiRequest<any>(`/admin/users/${userId}/disable`, {
+    method: 'PATCH',
+    body: { reason },
+  });
+}
+
+export function restoreAdminUser(userId: string) {
+  return apiRequest<any>(`/admin/users/${userId}/restore`, {
+    method: 'PATCH',
+  });
+}
+
+export function permanentlyDeleteAdminUser(userId: string) {
+  return apiRequest<any>(`/admin/users/${userId}`, {
+    method: 'DELETE',
   });
 }
 

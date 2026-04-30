@@ -29,7 +29,7 @@ const demoUsers = [
     ],
   },
   {
-    name: 'Maria Santos',
+    name: 'Demo Laborer Maria',
     email: 'labor@agrihub.com',
     phone: '+63 917 111 1002',
     role: 'user',
@@ -47,12 +47,29 @@ const demoUsers = [
       specialization: 'Irrigation and harvesting',
     },
     laborProfile: {
+      title: 'Irrigation and field labor service',
+      description: 'Experienced field worker for irrigation setup, crop watering, and harvest support.',
       workerType: 'Irrigator',
       rate: 22,
       availability: 'Available',
       skills: ['Drip System', 'Sprinkler', 'Flood'],
       distance: '3 km',
+      serviceArea: 'Bulacan farms and nearby barangays',
       rating: 4.9,
+      isPublished: true,
+      listings: [
+        {
+          title: 'Irrigator Labor',
+          description: 'Experienced field worker for irrigation setup, crop watering, and harvest support.',
+          workerType: 'Irrigator',
+          rate: 22,
+          availability: 'Available',
+          skills: ['Drip System', 'Sprinkler', 'Flood'],
+          distance: '3 km',
+          serviceArea: 'Bulacan farms and nearby barangays',
+          isPublished: true,
+        },
+      ],
       activeBookings: [
         { worker: 'Maria Santos', type: 'Irrigator', date: '2026-04-16', time: '07:00 AM', duration: '6 hours', location: 'Field B', rate: 22, status: 'confirmed', cost: 132 },
       ],
@@ -83,7 +100,7 @@ const demoUsers = [
         { name: 'Sprayer System', rate: 35, unit: 'hour', available: false, image: '💧' },
       ],
       bookings: [
-        { service: 'Tractor (70 HP)', provider: 'AgriEquip Rentals', date: '2026-04-17', time: '08:00 AM', duration: '6 hours', location: 'Field A, Brgy. San Isidro', status: 'confirmed', description: 'Heavy-duty tractor rental for plowing and land preparation. Includes operator.', rate: '$45/hour', contact: '+63 917 123 4567', bookingRef: 'BK-2026-1001' },
+    { service: 'Tractor (70 HP)', provider: 'AgriEquip Rentals', date: '2026-04-17', time: '08:00 AM', duration: '6 hours', location: 'Field A, Brgy. San Isidro', status: 'confirmed', description: 'Heavy-duty tractor rental for plowing and land preparation. Includes operator.', rate: '₱45.00/hour', contact: '+63 917 123 4567', bookingRef: 'BK-2026-1001' },
       ],
     },
   },

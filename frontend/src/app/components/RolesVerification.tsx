@@ -138,6 +138,15 @@ function createEmptyForm() {
   };
 }
 
+function normalizeExperienceYears(value: string) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function formatExperienceYears(value: string) {
+  const normalized = normalizeExperienceYears(value);
+  return normalized ? `${normalized} years` : '';
+}
+
 function getRequiredUploadKeys(role: RoleKey) {
   return role === 'seller'
     ? ['id-front', 'id-back', 'selfie', 'farm-proof']
@@ -192,6 +201,19 @@ function getStatusTone(status: VerificationStatus) {
     label: 'Not started',
     icon: <ShieldCheck className="w-4 h-4" />,
   };
+}
+
+function getProfileVerificationAddress(user: SessionUser | null) {
+  const directAddress = String(user?.profile?.address || '').trim();
+
+  if (directAddress) {
+    return directAddress;
+  }
+
+  return [user?.profile?.streetAddress, user?.profile?.city, user?.profile?.state, user?.profile?.country]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(', ');
 }
 
 function UploadBox({
@@ -341,6 +363,7 @@ function KycWizard({
   setForm,
   submitting,
   onSubmit,
+  profileVerificationAddress,
 }: {
   role: RoleKey;
   title: string;
@@ -355,6 +378,7 @@ function KycWizard({
   setForm: Dispatch<SetStateAction<KycFormState>>;
   submitting: boolean;
   onSubmit: () => Promise<void>;
+  profileVerificationAddress: string;
 }) {
   const [step, setStep] = useState<WizardStep>(0);
   const tone = getStatusTone(status);
@@ -520,14 +544,25 @@ function KycWizard({
                     <li>Take photos in a bright area with no blur, glare, or cropped edges.</li>
                   </ul>
                 </div>
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4 md:col-span-2">
+                  <p className="text-sm font-semibold text-gray-900">Profile address on file</p>
+                  <p className="mt-2 text-sm text-gray-700">
+                    {profileVerificationAddress || 'No saved address found in your profile yet. Update your profile address before continuing.'}
+                  </p>
+                </div>
                 <label className="flex items-start gap-3 rounded-2xl border border-gray-200 p-4 md:col-span-2">
                   <input
                     type="checkbox"
                     checked={form.addressConfirmed}
                     onChange={(event) => setForm((current) => ({ ...current, addressConfirmed: event.target.checked }))}
                     className="mt-1 h-4 w-4 accent-green-600"
+                    disabled={!profileVerificationAddress}
                   />
-                  <span className="text-sm text-gray-700">I confirm my profile address and contact details are accurate and belong to me.</span>
+                  <span className="text-sm text-gray-700">
+                    {profileVerificationAddress
+                      ? 'I confirm this saved profile address and my contact details are accurate and belong to me.'
+                      : 'Add your address to your profile first so we can use it for address verification.'}
+                  </span>
                 </label>
                 <label className="flex items-start gap-3 rounded-2xl border border-gray-200 p-4 md:col-span-2">
                   <input
@@ -695,8 +730,9 @@ function KycWizard({
                         <input
                           type="text"
                           value={form.experience}
-                          onChange={(event) => setForm((current) => ({ ...current, experience: event.target.value }))}
-                          placeholder="Required: example 3 years in rice planting and irrigation"
+                          inputMode="numeric"
+                          onChange={(event) => setForm((current) => ({ ...current, experience: normalizeExperienceYears(event.target.value) }))}
+                          placeholder="Required: example 3"
                           className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
                         />
                         <label className="mb-2 mt-4 block text-sm font-medium text-gray-700">Work summary</label>
@@ -733,7 +769,7 @@ function KycWizard({
                     <ReviewLine label="Work proof type" value={form.laborProofType || 'Not selected'} />
                   ) : null}
                   {role === 'laborer' ? (
-                    <ReviewLine label="Experience" value={form.experience || 'Not set'} />
+                    <ReviewLine label="Experience" value={formatExperienceYears(form.experience) || 'Not set'} />
                   ) : null}
                   {role === 'laborer' ? (
                     <ReviewLine label="Work summary" value={form.description || 'Not set'} />
@@ -815,6 +851,7 @@ export function RolesVerification({
   defaultExpandedRole = null,
 }: RolesVerificationProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const profileVerificationAddress = getProfileVerificationAddress(user);
   const [sellerStatus, setSellerStatus] = useState<VerificationStatus>('unverified');
   const [laborerStatus, setLaborerStatus] = useState<VerificationStatus>('unverified');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -1025,6 +1062,7 @@ export function RolesVerification({
           setForm={setSellerForm}
           submitting={sellerSubmitting}
           onSubmit={handleSellerSubmit}
+          profileVerificationAddress={profileVerificationAddress}
         />
 
         <KycWizard
@@ -1044,6 +1082,7 @@ export function RolesVerification({
           setForm={setLaborerForm}
           submitting={laborerSubmitting}
           onSubmit={handleLaborerSubmit}
+          profileVerificationAddress={profileVerificationAddress}
         />
       </div>
 

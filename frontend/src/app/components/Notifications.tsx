@@ -1,11 +1,11 @@
 import { X, CheckCircle, AlertCircle, Info, Trash2, Bell } from 'lucide-react';
 
 interface Notification {
-  id: number;
+  id: string;
   type: 'success' | 'warning' | 'info';
   title: string;
   message: string;
-  time: string;
+  createdAt: string;
   read: boolean;
 }
 
@@ -13,9 +13,54 @@ interface NotificationsProps {
   isOpen: boolean;
   onClose: () => void;
   notifications: Notification[];
-  onMarkAsRead: (id: number) => void;
-  onDelete: (id: number) => void;
+  onMarkAsRead: (id: string) => void;
+  onDelete: (id: string) => void;
   onClearAll: () => void;
+}
+
+function formatRelativeNotificationTime(value: string) {
+  const timestamp = new Date(value).getTime();
+
+  if (Number.isNaN(timestamp)) {
+    return 'Just now';
+  }
+
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const diffSeconds = Math.floor(diffMs / 1000);
+
+  if (diffSeconds < 10) {
+    return 'Just now';
+  }
+
+  if (diffSeconds < 60) {
+    return `${diffSeconds} seconds ago`;
+  }
+
+  const diffMinutes = Math.floor(diffSeconds / 60);
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} ${diffMinutes === 1 ? 'minute' : 'minutes'} ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+
+  if (diffHours < 24) {
+    return `${diffHours} ${diffHours === 1 ? 'hour' : 'hours'} ago`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffDays < 7) {
+    return `${diffDays} ${diffDays === 1 ? 'day' : 'days'} ago`;
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
 }
 
 export function Notifications({
@@ -117,7 +162,7 @@ export function Notifications({
                         )}
                       </div>
                       <p className="text-sm text-gray-600 mt-1">{notification.message}</p>
-                      <p className="text-xs text-gray-400 mt-2">{notification.time}</p>
+                      <p className="text-xs text-gray-400 mt-2">{formatRelativeNotificationTime(notification.createdAt)}</p>
                     </div>
                     <button
                       onClick={(e) => {

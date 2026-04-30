@@ -3,6 +3,8 @@ import { Truck, Wrench, Droplet, Scissors, Calendar, Clock, MapPin, ArrowLeft, E
 import { getServicesData } from '../../features/app/api';
 import { SessionUser } from '../../shared/auth/session';
 import { addStoredActivity } from '../../shared/activity/store';
+import { formatPhpCurrency } from '../../shared/format/currency';
+import { addStoredNotification } from '../../shared/notifications/store';
 
 interface ServicesBookingProps {
   onBookService: (service: any) => void;
@@ -57,6 +59,12 @@ export function ServicesBooking({ onBookService, currentUser }: ServicesBookingP
         description: `Cancelled service booking for ${cancelledBooking.service}`,
         status: 'confirmed',
       });
+      addStoredNotification(currentUser.id, {
+        sourceKey: `service-booking-cancelled-${cancelledBooking.bookingRef || cancelledBooking.id}`,
+        type: 'warning',
+        title: 'Service booking cancelled',
+        message: `${cancelledBooking.service} on ${cancelledBooking.date} has been cancelled.`,
+      });
     }
     setCancelConfirmId(null);
   };
@@ -100,7 +108,7 @@ export function ServicesBooking({ onBookService, currentUser }: ServicesBookingP
               <DetailRow icon={<Calendar className="w-5 h-5 text-green-600" />} label="Date" value={booking.date} />
               <DetailRow icon={<Clock className="w-5 h-5 text-green-600" />} label="Time" value={`${booking.time} (${booking.duration})`} />
               <DetailRow icon={<MapPin className="w-5 h-5 text-green-600" />} label="Location" value={booking.location} />
-              <DetailRow icon={<Info className="w-5 h-5 text-green-600" />} label="Rate" value={booking.rate} />
+              <DetailRow icon={<Info className="w-5 h-5 text-green-600" />} label="Rate" value={formatServiceRateLabel(booking.rate)} />
             </div>
 
             {/* Description */}
@@ -321,7 +329,7 @@ export function ServicesBooking({ onBookService, currentUser }: ServicesBookingP
                   <p className="text-sm text-gray-600">{service.provider}</p>
                 </div>
                 <div className="mb-4">
-                  <p className="text-2xl font-bold text-green-600 text-center">${service.rate}</p>
+                  <p className="text-2xl font-bold text-green-600 text-center">{formatPhpCurrency(service.rate)}</p>
                   <p className="text-xs text-gray-500 text-center">per {service.unit}</p>
                 </div>
                 <button
@@ -377,5 +385,19 @@ function StatusBadgeLarge({ status }: { status: string }) {
       <span>{c.label}</span>
     </span>
   );
+}
+
+function formatServiceRateLabel(value: string | number) {
+  const normalized = String(value || '').trim();
+  const amount = normalized.match(/-?\d+(?:\.\d+)?/)?.[0];
+
+  if (!amount) {
+    return normalized || 'Rate unavailable';
+  }
+
+  const unitMatch = normalized.match(/\/\s*([a-zA-Z]+)/);
+  const unit = unitMatch?.[1] || 'hour';
+
+  return `${formatPhpCurrency(Number(amount))}/${unit}`;
 }
 

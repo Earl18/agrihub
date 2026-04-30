@@ -26,6 +26,13 @@ function sanitizeAdminUser(user) {
     roles,
     isAdmin: hasRole(user, 'admin'),
     isSuperAdmin: isSuperAdmin(user),
+    accountStatus: user.accountStatus || 'active',
+    disabledAt: user.disabledAt || null,
+    disabledReason: user.disabledReason || '',
+    pendingDisableAt: user.pendingDisableAt || null,
+    pendingDisableReason: user.pendingDisableReason || '',
+    pendingDeleteAt: user.pendingDeleteAt || null,
+    pendingDeleteReason: user.pendingDeleteReason || '',
     emailVerified: Boolean(user.emailVerified),
     verification,
     verificationMeta: {
@@ -62,6 +69,127 @@ function sanitizeAdminUser(user) {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
+}
+
+function hasActiveLaborBookings(user) {
+  return Array.isArray(user?.laborProfile?.activeBookings) && user.laborProfile.activeBookings.length > 0;
+}
+
+function hasPendingServiceBookings(user) {
+  return Array.isArray(user?.serviceProfile?.bookings)
+    && user.serviceProfile.bookings.some((booking) => {
+      const status = String(booking?.status || '').trim().toLowerCase();
+      return status && !['completed', 'cancelled'].includes(status);
+    });
+}
+
+function hasActiveBuyerBookings(user) {
+  return Array.isArray(user?.laborBookings?.activeBookings) && user.laborBookings.activeBookings.length > 0;
+}
+
+function hasActiveBookings(user) {
+  return hasActiveLaborBookings(user) || hasPendingServiceBookings(user) || hasActiveBuyerBookings(user);
+}
+
+async function hasBlockingActiveBookingLinks(userId) {
+  const normalizedUserId = String(userId || '').trim();
+
+  if (!normalizedUserId) {
+    return false;
+  }
+
+  const linkedUser = await User.exists({
+    _id: { $ne: normalizedUserId },
+    $or: [
+      {
+        'laborBookings.activeBookings': {
+          $elemMatch: {
+            workerId: normalizedUserId,
+          },
+        },
+      },
+      {
+        'laborProfile.activeBookings': {
+          $elemMatch: {
+            bookedByUserId: normalizedUserId,
+          },
+        },
+      },
+    ],
+  });
+
+  return Boolean(linkedUser);
+}
+
+function clearPendingDisable(user) {
+  user.pendingDisableAt = null;
+  user.pendingDisableReason = '';
+}
+
+function clearPendingDelete(user) {
+  user.pendingDeleteAt = null;
+  user.pendingDeleteReason = '';
+}
+
+function applyDisableState(user, reason = '') {
+  user.accountStatus = 'disabled';
+  user.disabledAt = new Date();
+  user.disabledReason = String(reason || '').trim();
+  clearPendingDisable(user);
+}
+
+async function applyPendingDisableIfEligible(user) {
+  if (!user?.pendingDisableAt || user.accountStatus === 'disabled' || hasActiveBookings(user)) {
+    return false;
+  }
+
+  applyDisableState(user, user.pendingDisableReason || user.disabledReason || '');
+  appendActivity(user, {
+    description: `Queued account disable took effect after active bookings finished${user.disabledReason ? `: ${user.disabledReason}` : ''}`,
+    status: 'confirmed',
+  });
+  await user.save();
+  return true;
+}
+
+async function deleteUserRecord(user) {
+  await removeDeletedUserReferences(user._id.toString());
+  await User.deleteOne({ _id: user._id });
+}
+
+async function applyPendingDeleteIfEligible(user) {
+  if (
+    !user?.pendingDeleteAt
+    || hasActiveBookings(user)
+    || await hasBlockingActiveBookingLinks(user._id.toString())
+  ) {
+    return false;
+  }
+
+  await deleteUserRecord(user);
+  return true;
+}
+
+async function removeDeletedUserReferences(userId) {
+  const normalizedUserId = String(userId || '').trim();
+
+  if (!normalizedUserId) {
+    return;
+  }
+
+  await User.updateMany(
+    {},
+    {
+      $pull: {
+        'laborBookings.activeBookings': {
+          $or: [{ workerId: normalizedUserId }, { bookedByUserId: normalizedUserId }],
+        },
+        'laborProfile.activeBookings': {
+          $or: [{ workerId: normalizedUserId }, { bookedByUserId: normalizedUserId }],
+        },
+      },
+    },
+  );
 }
 
 function buildPenaltyPayload({
@@ -412,6 +540,134 @@ export async function updateUserPenalty(req, res, next) {
   }
 }
 
+export async function softDeleteUser(req, res, next) {
+  try {
+    const { userId } = req.params;
+    const { reason = '' } = req.body || {};
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    if (isSuperAdmin(user)) {
+      return res.status(400).json({ message: 'Super admin accounts cannot be disabled.' });
+    }
+
+    if (req.user?._id?.toString() === user._id.toString()) {
+      return res.status(400).json({ message: 'You cannot disable your own account.' });
+    }
+
+    const normalizedReason = String(reason || '').trim();
+
+    if (hasActiveBookings(user) || await hasBlockingActiveBookingLinks(user._id.toString())) {
+      user.pendingDisableAt = new Date();
+      user.pendingDisableReason = normalizedReason;
+      user.disabledReason = normalizedReason;
+
+      appendActivity(user, {
+        description: `Account disable queued until all active booking links are cleared${normalizedReason ? `: ${normalizedReason}` : ''}`,
+        status: 'pending',
+      });
+      await user.save();
+
+      return res.json({
+        message:
+          'User has active bookings or active booking links. The account disable is queued and will only take effect once those active bookings are cleared.',
+        user: sanitizeAdminUser(user),
+      });
+    }
+
+    applyDisableState(user, normalizedReason);
+
+    appendActivity(user, {
+      description: `Account disabled by super admin${user.disabledReason ? `: ${user.disabledReason}` : ''}`,
+      status: 'confirmed',
+    });
+    await user.save();
+
+    res.json({
+      message: 'User account disabled.',
+      user: sanitizeAdminUser(user),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function restoreUser(req, res, next) {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    user.accountStatus = 'active';
+    user.disabledAt = null;
+    user.disabledReason = '';
+    clearPendingDisable(user);
+    clearPendingDelete(user);
+
+    appendActivity(user, {
+      description: 'Account restored by super admin',
+      status: 'completed',
+    });
+    await user.save();
+
+    res.json({
+      message: 'User account restored.',
+      user: sanitizeAdminUser(user),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function permanentlyDeleteUser(req, res, next) {
+  try {
+    const { userId } = req.params;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+
+    if (isSuperAdmin(user)) {
+      return res.status(400).json({ message: 'Super admin accounts cannot be permanently deleted.' });
+    }
+
+    if (req.user?._id?.toString() === user._id.toString()) {
+      return res.status(400).json({ message: 'You cannot permanently delete your own account.' });
+    }
+
+    if (hasActiveBookings(user) || await hasBlockingActiveBookingLinks(user._id.toString())) {
+      user.pendingDeleteAt = user.pendingDeleteAt || new Date();
+
+      appendActivity(user, {
+        description: 'Account permanent delete queued until all active booking links are cleared',
+        status: 'pending',
+      });
+      await user.save();
+
+      return res.json({
+        message:
+          'User has active bookings or active booking links. The permanent delete is queued and will only take effect once those active bookings are cleared.',
+        user: sanitizeAdminUser(user),
+      });
+    }
+
+    await deleteUserRecord(user);
+
+    res.json({
+      message: 'User account and related listings data were permanently deleted.',
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function deleteMarketplaceListing(req, res, next) {
   try {
     const { userId, listingIndex } = req.params;
@@ -465,6 +721,12 @@ export async function updateLaborBookingStatus(req, res, next) {
 
     const booking = source[index];
     const bookingDescription = booking?.type || booking?.worker || 'labor booking';
+    const counterpartUserId =
+      bookingType === 'active'
+        ? String(
+            source[index]?.bookedByUserId || source[index]?.workerId || '',
+          ).trim()
+        : '';
     booking.status = String(status || booking.status);
 
     if (bookingType === 'active' && ['completed', 'cancelled'].includes(booking.status)) {
@@ -477,6 +739,17 @@ export async function updateLaborBookingStatus(req, res, next) {
       status: booking.status === 'completed' ? 'completed' : booking.status === 'cancelled' ? 'confirmed' : 'pending',
     });
     await laborer.save();
+    await applyPendingDisableIfEligible(laborer);
+    await applyPendingDeleteIfEligible(laborer);
+
+    if (counterpartUserId && counterpartUserId !== laborer._id.toString()) {
+      const counterpartUser = await User.findById(counterpartUserId);
+
+      if (counterpartUser) {
+        await applyPendingDisableIfEligible(counterpartUser);
+        await applyPendingDeleteIfEligible(counterpartUser);
+      }
+    }
 
     res.json({ message: 'Labor booking updated.' });
   } catch (error) {
@@ -511,6 +784,8 @@ export async function updateServiceBookingStatus(req, res, next) {
       status: booking.status === 'confirmed' ? 'completed' : booking.status === 'cancelled' ? 'confirmed' : 'pending',
     });
     await provider.save();
+    await applyPendingDisableIfEligible(provider);
+    await applyPendingDeleteIfEligible(provider);
 
     res.json({ message: 'Service booking updated.' });
   } catch (error) {

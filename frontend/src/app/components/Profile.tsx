@@ -6,8 +6,10 @@ import {
   createProfileAvatarUploadUrl,
   getCurrentUserProfile,
   requestCurrentUserEmailChange,
+  requestCurrentUserPhoneChange,
   updateCurrentUserProfile,
   verifyCurrentUserEmailChange,
+  verifyCurrentUserPhoneChange,
 } from '../../features/app/api';
 import {
   clearSession,
@@ -52,6 +54,198 @@ const AVATAR_OUTPUT_TYPE = 'image/jpeg';
 const AVATAR_OUTPUT_QUALITY = 0.92;
 const GENDER_OPTIONS = ['Male', 'Female', 'Non-binary', 'Prefer not to say'];
 const CIVIL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Separated', 'Prefer not to say'];
+const NATIONALITY_OPTIONS = [
+  'Afghan',
+  'Albanian',
+  'Algerian',
+  'American',
+  'Andorran',
+  'Angolan',
+  'Antiguan and Barbudan',
+  'Argentine',
+  'Armenian',
+  'Australian',
+  'Austrian',
+  'Azerbaijani',
+  'Bahamian',
+  'Bahraini',
+  'Bangladeshi',
+  'Barbadian',
+  'Belarusian',
+  'Belgian',
+  'Belizean',
+  'Beninese',
+  'Bhutanese',
+  'Bolivian',
+  'Bosnian and Herzegovinian',
+  'Botswanan',
+  'Brazilian',
+  'British',
+  'Bruneian',
+  'Bulgarian',
+  'Burkinabe',
+  'Burundian',
+  'Cabo Verdean',
+  'Cambodian',
+  'Cameroonian',
+  'Canadian',
+  'Central African',
+  'Chadian',
+  'Chilean',
+  'Chinese',
+  'Colombian',
+  'Comorian',
+  'Congolese',
+  'Costa Rican',
+  'Croatian',
+  'Cuban',
+  'Cypriot',
+  'Czech',
+  'Danish',
+  'Djiboutian',
+  'Dominican',
+  'Dutch',
+  'East Timorese',
+  'Ecuadorian',
+  'Egyptian',
+  'Emirati',
+  'Equatorial Guinean',
+  'Eritrean',
+  'Estonian',
+  'Eswatini',
+  'Ethiopian',
+  'Fijian',
+  'Filipino',
+  'Finnish',
+  'French',
+  'Gabonese',
+  'Gambian',
+  'Georgian',
+  'German',
+  'Ghanaian',
+  'Greek',
+  'Grenadian',
+  'Guatemalan',
+  'Guinean',
+  'Guinea-Bissauan',
+  'Guyanese',
+  'Haitian',
+  'Honduran',
+  'Hungarian',
+  'Icelandic',
+  'Indian',
+  'Indonesian',
+  'Iranian',
+  'Iraqi',
+  'Irish',
+  'Israeli',
+  'Italian',
+  'Ivorian',
+  'Jamaican',
+  'Japanese',
+  'Jordanian',
+  'Kazakh',
+  'Kenyan',
+  'Kiribati',
+  'Kuwaiti',
+  'Kyrgyz',
+  'Lao',
+  'Latvian',
+  'Lebanese',
+  'Liberian',
+  'Libyan',
+  'Liechtensteiner',
+  'Lithuanian',
+  'Luxembourger',
+  'Malagasy',
+  'Malawian',
+  'Malaysian',
+  'Maldivian',
+  'Malian',
+  'Maltese',
+  'Marshallese',
+  'Mauritanian',
+  'Mauritian',
+  'Mexican',
+  'Micronesian',
+  'Moldovan',
+  'Monacan',
+  'Mongolian',
+  'Montenegrin',
+  'Moroccan',
+  'Mozambican',
+  'Myanmar',
+  'Namibian',
+  'Nauruan',
+  'Nepalese',
+  'New Zealander',
+  'Nicaraguan',
+  'Nigerien',
+  'Nigerian',
+  'North Korean',
+  'North Macedonian',
+  'Norwegian',
+  'Omani',
+  'Pakistani',
+  'Palauan',
+  'Panamanian',
+  'Papua New Guinean',
+  'Paraguayan',
+  'Peruvian',
+  'Polish',
+  'Portuguese',
+  'Qatari',
+  'Romanian',
+  'Russian',
+  'Rwandan',
+  'Saint Kitts and Nevis',
+  'Saint Lucian',
+  'Saint Vincentian',
+  'Samoan',
+  'San Marinese',
+  'Sao Tomean',
+  'Saudi',
+  'Senegalese',
+  'Serbian',
+  'Seychellois',
+  'Sierra Leonean',
+  'Singaporean',
+  'Slovak',
+  'Slovenian',
+  'Solomon Islander',
+  'Somali',
+  'South African',
+  'South Korean',
+  'South Sudanese',
+  'Spanish',
+  'Sri Lankan',
+  'Sudanese',
+  'Surinamese',
+  'Swedish',
+  'Swiss',
+  'Syrian',
+  'Taiwanese',
+  'Tajik',
+  'Tanzanian',
+  'Thai',
+  'Togolese',
+  'Tongan',
+  'Trinidadian and Tobagonian',
+  'Tunisian',
+  'Turkish',
+  'Turkmen',
+  'Tuvaluan',
+  'Ugandan',
+  'Ukrainian',
+  'Uruguayan',
+  'Uzbek',
+  'Vanuatuan',
+  'Venezuelan',
+  'Vietnamese',
+  'Yemeni',
+  'Zambian',
+  'Zimbabwean',
+];
 
 const EMPTY_PROFILE: ProfileData = {
   firstName: '',
@@ -128,7 +322,7 @@ function mapUserToProfile(user?: Partial<SessionUser> & { phone?: string; profil
     firstName: nameParts.firstName,
     middleName: nameParts.middleName,
     lastName: nameParts.lastName,
-    age: user?.profile?.age || '',
+    age: calculateAgeFromBirthdate(user?.profile?.dateOfBirth || '') || user?.profile?.age || '',
     gender: user?.profile?.gender || '',
     dateOfBirth: user?.profile?.dateOfBirth || '',
     civilStatus: user?.profile?.civilStatus || '',
@@ -160,6 +354,47 @@ function mapUserToProfile(user?: Partial<SessionUser> & { phone?: string; profil
 
 function getDisplayValue(value: string, fallback = 'Not set') {
   return value?.trim() ? value : fallback;
+}
+
+function calculateAgeFromBirthdate(dateOfBirth: string) {
+  const normalizedDate = String(dateOfBirth || '').trim();
+
+  if (!normalizedDate) {
+    return '';
+  }
+
+  const birthDate = new Date(normalizedDate);
+
+  if (Number.isNaN(birthDate.getTime())) {
+    return '';
+  }
+
+  const today = new Date();
+  let age = today.getFullYear() - birthDate.getFullYear();
+  const monthDifference = today.getMonth() - birthDate.getMonth();
+
+  if (
+    monthDifference < 0 ||
+    (monthDifference === 0 && today.getDate() < birthDate.getDate())
+  ) {
+    age -= 1;
+  }
+
+  return age >= 0 ? String(age) : '';
+}
+
+function normalizeExperienceYears(value: string) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function formatExperienceYears(value: string) {
+  const normalized = normalizeExperienceYears(value);
+
+  if (!normalized) {
+    return '';
+  }
+
+  return normalized === '1' ? '1 year' : `${normalized} years`;
 }
 
 function buildAvatarFileName(fileName: string) {
@@ -282,6 +517,23 @@ function extractLocationSummary(place: any) {
   return [sublocality, locality, adminArea, country].filter(Boolean).join(', ');
 }
 
+function buildPlaceDisplayAddress(place: any) {
+  const placeName = String(place?.name || '').trim();
+  const formattedAddress = String(place?.formatted_address || '').trim();
+
+  if (!placeName) {
+    return formattedAddress;
+  }
+
+  if (!formattedAddress) {
+    return placeName;
+  }
+
+  return formattedAddress.toLowerCase().includes(placeName.toLowerCase())
+    ? formattedAddress
+    : `${placeName}, ${formattedAddress}`;
+}
+
 function extractStructuredAddress(place: any) {
   let streetNumber = '';
   let route = '';
@@ -329,7 +581,7 @@ function extractStructuredAddress(place: any) {
   }
 
   return {
-    streetAddress: [streetNumber, route].filter(Boolean).join(' ').trim() || premise,
+    streetAddress: [streetNumber, route].filter(Boolean).join(' ').trim() || premise || String(place?.name || '').trim(),
     city: city || sublocality,
     state,
     postalCode,
@@ -359,6 +611,13 @@ export function Profile() {
     text: string;
   } | null>(null);
   const [showEmailVerificationModal, setShowEmailVerificationModal] = useState(false);
+  const [phoneVerificationCode, setPhoneVerificationCode] = useState('');
+  const [phoneLinkBusy, setPhoneLinkBusy] = useState(false);
+  const [phoneLinkMessage, setPhoneLinkMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
+  const [showPhoneVerificationModal, setShowPhoneVerificationModal] = useState(false);
   const previewObjectUrlRef = useRef<string | null>(null);
 
   const loadProfile = () => {
@@ -384,6 +643,8 @@ export function Profile() {
         verification: user.verification,
         verificationMeta: user.verificationMeta,
         emailChangePending: user.emailChangePending,
+        phoneVerification: user.phoneVerification,
+        phoneChangePending: user.phoneChangePending,
       });
       })
       .catch(() => undefined);
@@ -392,6 +653,21 @@ export function Profile() {
   useEffect(() => {
     setEditedData(profileData);
   }, [profileData]);
+
+  useEffect(() => {
+    setEditedData((current) => {
+      const computedAge = calculateAgeFromBirthdate(current.dateOfBirth);
+
+      if (current.age === computedAge) {
+        return current;
+      }
+
+      return {
+        ...current,
+        age: computedAge,
+      };
+    });
+  }, [editedData.dateOfBirth]);
 
   useEffect(() => {
     loadProfile();
@@ -419,6 +695,9 @@ export function Profile() {
   const penaltyStatus = sessionMeta?.penalty?.status || 'good';
   const hasAccountPenalty = penaltyStatus !== 'good';
   const pendingEmailChange = sessionMeta?.emailChangePending || null;
+  const pendingPhoneChange = sessionMeta?.phoneChangePending || null;
+  const phoneVerificationStatus = sessionMeta?.phoneVerification?.status || 'unverified';
+  const phoneVerificationSource = sessionMeta?.phoneVerification?.source || 'email';
   useEffect(() => {
     if (!mapsApiKey) {
       return;
@@ -456,7 +735,7 @@ export function Profile() {
 
     autocomplete.addListener('place_changed', () => {
       const place = autocomplete.getPlace();
-      const formattedAddress = place.formatted_address || place.name || addressInputRef.current?.value || '';
+      const formattedAddress = buildPlaceDisplayAddress(place) || addressInputRef.current?.value || '';
       const lat = place.geometry?.location?.lat();
       const lng = place.geometry?.location?.lng();
       const locationSummary = extractLocationSummary(place);
@@ -507,7 +786,7 @@ export function Profile() {
         avatarPath = uploadTarget.path;
       }
 
-      const { user } = await updateCurrentUserProfile({
+      const { user, message } = await updateCurrentUserProfile({
         name: combineName(editedData),
         email: profileData.email,
         phone: editedData.phone,
@@ -515,7 +794,7 @@ export function Profile() {
           firstName: editedData.firstName,
           middleName: editedData.middleName,
           lastName: editedData.lastName,
-          age: editedData.age,
+          age: calculateAgeFromBirthdate(editedData.dateOfBirth),
           gender: editedData.gender,
           dateOfBirth: editedData.dateOfBirth,
           civilStatus: editedData.civilStatus,
@@ -552,6 +831,8 @@ export function Profile() {
         },
       });
 
+      successMessage = message || successMessage;
+
       const nextEmail = editedData.email.trim().toLowerCase();
       const currentEmail = profileData.email.trim().toLowerCase();
 
@@ -583,6 +864,8 @@ export function Profile() {
         verification: user.verification,
         verificationMeta: user.verificationMeta,
         emailChangePending: user.emailChangePending,
+        phoneVerification: user.phoneVerification,
+        phoneChangePending: user.phoneChangePending,
       };
       persistSessionUser(nextSessionUser);
       setSessionMeta(nextSessionUser);
@@ -672,6 +955,108 @@ export function Profile() {
     navigate('/');
   };
 
+  const closePhoneVerificationModal = () => {
+    setShowPhoneVerificationModal(false);
+    setPhoneVerificationCode('');
+    setPhoneLinkMessage(null);
+  };
+
+  const handleRequestPhoneVerification = async () => {
+    const phone = editedData.phone.trim() || profileData.phone.trim();
+
+    if (!phone) {
+      setPhoneLinkMessage({
+        type: 'error',
+        text: 'Enter a phone number first.',
+      });
+      return;
+    }
+
+    setPhoneLinkBusy(true);
+    setPhoneLinkMessage(null);
+    setSaveMessage(null);
+
+    try {
+      const response = await requestCurrentUserPhoneChange(phone);
+      setPhoneLinkMessage({ type: 'success', text: response.message });
+      setPhoneVerificationCode('');
+      setShowPhoneVerificationModal(true);
+      loadProfile();
+    } catch (error: any) {
+      setPhoneLinkMessage({
+        type: 'error',
+        text: error?.message || 'Unable to send the phone verification code right now.',
+      });
+    } finally {
+      setPhoneLinkBusy(false);
+    }
+  };
+
+  const handleSubmitPhoneVerification = async () => {
+    const phone = pendingPhoneChange?.phone || profileData.phone;
+
+    if (!phone || !phoneVerificationCode.trim()) {
+      setPhoneLinkMessage({
+        type: 'error',
+        text: 'Enter the verification code sent to your email.',
+      });
+      return;
+    }
+
+    setPhoneLinkBusy(true);
+
+    try {
+      const { user, message } = await verifyCurrentUserPhoneChange(
+        phone,
+        phoneVerificationCode.trim(),
+      );
+      const nextProfile = mapUserToProfile(user);
+
+      setProfileData(nextProfile);
+      setEditedData(nextProfile);
+      setSessionMeta(user);
+      persistSessionUser(user);
+      setPhoneLinkMessage({ type: 'success', text: message });
+      closePhoneVerificationModal();
+      loadProfile();
+    } catch (error: any) {
+      setPhoneLinkMessage({
+        type: 'error',
+        text: error?.message || 'Unable to verify the phone number right now.',
+      });
+    } finally {
+      setPhoneLinkBusy(false);
+    }
+  };
+
+  const handleResendPhoneVerification = async () => {
+    const phone = pendingPhoneChange?.phone || profileData.phone;
+
+    if (!phone) {
+      setPhoneLinkMessage({
+        type: 'error',
+        text: 'Enter a phone number first.',
+      });
+      return;
+    }
+
+    setPhoneLinkBusy(true);
+    setPhoneLinkMessage(null);
+
+    try {
+      const response = await requestCurrentUserPhoneChange(phone);
+      setPhoneLinkMessage({ type: 'success', text: response.message });
+      loadProfile();
+    } catch (error: any) {
+      setPhoneLinkMessage({
+        type: 'error',
+        text: error?.message || 'Unable to resend the phone verification code right now.',
+      });
+    } finally {
+      setPhoneLinkBusy(false);
+    }
+  };
+
   const handleProfilePhotoClick = () => {
     if (!isEditing) {
       return;
@@ -743,6 +1128,52 @@ export function Profile() {
                 </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {phoneVerificationStatus !== 'verified' ? (
+        <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="font-medium">Phone number is unverified</p>
+              <p className="mt-1">
+                AgriHub can verify {getDisplayValue(pendingPhoneChange?.phone || profileData.phone, 'your phone number')} by sending a code to {profileData.email}.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {!pendingPhoneChange?.phone ? (
+                <button
+                  onClick={handleRequestPhoneVerification}
+                  disabled={phoneLinkBusy}
+                  className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {phoneLinkBusy ? 'Sending...' : 'Send Verification Code'}
+                </button>
+              ) : null}
+              {pendingPhoneChange?.phone ? (
+                <button
+                  onClick={() => {
+                    setPhoneLinkMessage(null);
+                    setShowPhoneVerificationModal(true);
+                  }}
+                  className="rounded-lg border border-sky-300 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100"
+                >
+                  Enter Code
+                </button>
+              ) : null}
+            </div>
+          </div>
+          {phoneLinkMessage && !showPhoneVerificationModal ? (
+            <div
+              className={`mt-3 rounded-lg border px-4 py-3 text-sm ${
+                phoneLinkMessage.type === 'success'
+                  ? 'border-green-200 bg-green-50 text-green-700'
+                  : 'border-red-200 bg-red-50 text-red-700'
+              }`}
+            >
+              {phoneLinkMessage.text}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -914,10 +1345,9 @@ export function Profile() {
             {isEditing ? (
               <input
                 type="text"
-                inputMode="numeric"
                 value={editedData.age}
-                onChange={(e) => setEditedData({ ...editedData, age: e.target.value.replace(/\D/g, '').slice(0, 3) })}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                readOnly
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg bg-gray-100 text-gray-500 focus:outline-none"
               />
             ) : (
               <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.age, 'Not set')}</p>
@@ -950,7 +1380,13 @@ export function Profile() {
               <input
                 type="date"
                 value={editedData.dateOfBirth}
-                onChange={(e) => setEditedData({ ...editedData, dateOfBirth: e.target.value })}
+                onChange={(e) =>
+                  setEditedData({
+                    ...editedData,
+                    dateOfBirth: e.target.value,
+                    age: calculateAgeFromBirthdate(e.target.value),
+                  })
+                }
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
               />
             ) : (
@@ -981,12 +1417,21 @@ export function Profile() {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Nationality</label>
             {isEditing ? (
-              <input
-                type="text"
+              <select
                 value={editedData.nationality}
                 onChange={(e) => setEditedData({ ...editedData, nationality: e.target.value })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
+              >
+                <option value="">Select nationality</option>
+                {editedData.nationality && !NATIONALITY_OPTIONS.includes(editedData.nationality) ? (
+                  <option value={editedData.nationality}>{editedData.nationality}</option>
+                ) : null}
+                {NATIONALITY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
             ) : (
               <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.nationality)}</p>
             )}
@@ -1030,14 +1475,46 @@ export function Profile() {
               Phone Number
             </label>
             {isEditing ? (
-              <input
-                type="tel"
-                value={editedData.phone}
-                onChange={(e) => setEditedData({ ...editedData, phone: e.target.value })}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-              />
+              <div className="space-y-2">
+                <input
+                  type="tel"
+                  value={editedData.phone}
+                  onChange={(e) => setEditedData({ ...editedData, phone: e.target.value })}
+                  placeholder="09XXXXXXXXX"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                />
+                <p className="text-xs text-gray-500">
+                  Save your changes to update the phone number. If it changes, AgriHub will email a verification code.
+                </p>
+              </div>
             ) : (
-              <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.phone, '0')}</p>
+              <div className="space-y-3">
+                <div className="rounded-lg bg-gray-50 px-4 py-2">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <span>{getDisplayValue(profileData.phone, 'Not linked')}</span>
+                    <span
+                      className={`inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-medium ${
+                        phoneVerificationStatus === 'verified'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-amber-100 text-amber-700'
+                      }`}
+                    >
+                      {phoneVerificationStatus === 'verified' ? 'Verified' : 'Unverified'}
+                    </span>
+                  </div>
+                </div>
+                {phoneLinkMessage ? (
+                  <div
+                    className={`rounded-lg border px-4 py-3 text-sm ${
+                      phoneLinkMessage.type === 'success'
+                        ? 'border-green-200 bg-green-50 text-green-700'
+                        : 'border-red-200 bg-red-50 text-red-700'
+                    }`}
+                  >
+                    {phoneLinkMessage.text}
+                  </div>
+                ) : null}
+              </div>
             )}
           </div>
 
@@ -1198,12 +1675,13 @@ export function Profile() {
                 {isEditing ? (
                   <input
                     type="text"
+                    inputMode="numeric"
                     value={editedData.experience}
-                    onChange={(e) => setEditedData({ ...editedData, experience: e.target.value })}
+                    onChange={(e) => setEditedData({ ...editedData, experience: normalizeExperienceYears(e.target.value) })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
                   />
                 ) : (
-                  <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(profileData.experience, '0')}</p>
+                  <p className="px-4 py-2 bg-gray-50 rounded-lg">{getDisplayValue(formatExperienceYears(profileData.experience), '0 years')}</p>
                 )}
               </div>
 
@@ -1325,6 +1803,72 @@ export function Profile() {
           </div>
         </div>
       ) : null}
+
+      {showPhoneVerificationModal && (pendingPhoneChange?.phone || profileData.phone) ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={closePhoneVerificationModal}
+          />
+          <div className="relative z-10 w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Verify Phone Number</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                Enter the 6-digit code sent to {profileData.email} for {pendingPhoneChange?.phone || profileData.phone}.
+              </p>
+            </div>
+
+              <div className="space-y-3">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={phoneVerificationCode}
+                onChange={(e) => setPhoneVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                placeholder="Enter 6-digit code"
+                className="w-full rounded-lg border border-gray-300 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+
+              {phoneLinkMessage ? (
+                <div
+                  className={`rounded-lg border px-4 py-3 text-sm ${
+                    phoneLinkMessage.type === 'success'
+                      ? 'border-green-200 bg-green-50 text-green-700'
+                      : 'border-red-200 bg-red-50 text-red-700'
+                  }`}
+                >
+                  {phoneLinkMessage.text}
+                </div>
+              ) : null}
+
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    onClick={handleResendPhoneVerification}
+                    disabled={phoneLinkBusy}
+                    className="text-sm font-medium text-sky-700 hover:text-sky-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Resend Code
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={closePhoneVerificationModal}
+                      className="flex-1 rounded-md border border-gray-300 px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={handleSubmitPhoneVerification}
+                      disabled={phoneLinkBusy || !phoneVerificationCode.trim()}
+                      className="flex-1 rounded-md bg-sky-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {phoneLinkBusy ? 'Verifying...' : 'Verify Phone'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+          </div>
+        </div>
+      ) : null}
+
     </div>
   );
 }

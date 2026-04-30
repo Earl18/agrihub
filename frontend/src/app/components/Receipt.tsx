@@ -1,4 +1,5 @@
-import { X, Download, Printer, CheckCircle } from 'lucide-react';
+import { X, CheckCircle } from 'lucide-react';
+import { formatPhpCurrency } from '../../shared/format/currency';
 
 export interface ReceiptData {
   id: string;
@@ -30,15 +31,6 @@ interface ReceiptProps {
 
 export function Receipt({ isOpen, onClose, receipt }: ReceiptProps) {
   if (!isOpen || !receipt) return null;
-
-  const handlePrint = () => {
-    window.print();
-  };
-
-  const handleDownload = () => {
-    // In a real app, this would generate a PDF
-    alert('Receipt downloaded! (PDF generation would happen here)');
-  };
 
   return (
     <>
@@ -79,7 +71,7 @@ export function Receipt({ isOpen, onClose, receipt }: ReceiptProps) {
             <div className="text-center mb-8 pb-8 border-b border-gray-100">
               <h3 className="text-3xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">AgriHub</h3>
               <p className="text-sm text-gray-600 mt-1">Complete Farm Management Platform</p>
-              <p className="text-sm text-gray-500 mt-1">www.agrihub.com | support@agrihub.com</p>
+              <p className="text-sm text-gray-500 mt-1">www.agrihub.com | agrihub183@gmail.com</p>
             </div>
 
             {/* Transaction Details */}
@@ -144,8 +136,8 @@ export function Receipt({ isOpen, onClose, receipt }: ReceiptProps) {
                         <td className="text-center py-3 text-gray-600">
                           {item.quantity} {item.unit}
                         </td>
-                        <td className="text-right py-3 text-gray-600">${item.price.toFixed(2)}</td>
-                        <td className="text-right py-3 font-semibold text-gray-900">${item.total.toFixed(2)}</td>
+                        <td className="text-right py-3 text-gray-600">{formatPhpCurrency(item.price)}</td>
+                        <td className="text-right py-3 font-semibold text-gray-900">{formatPhpCurrency(item.total)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -157,45 +149,37 @@ export function Receipt({ isOpen, onClose, receipt }: ReceiptProps) {
             <div className="space-y-3 mb-8 pb-8 border-b border-gray-100">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Subtotal</span>
-                <span className="font-semibold text-gray-900">${receipt.subtotal.toFixed(2)}</span>
+                <span className="font-semibold text-gray-900">{formatPhpCurrency(receipt.subtotal)}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Tax (8%)</span>
-                <span className="font-semibold text-gray-900">${receipt.tax.toFixed(2)}</span>
+                <span className="font-semibold text-gray-900">{formatPhpCurrency(receipt.tax)}</span>
               </div>
               {receipt.shipping !== undefined && receipt.shipping > 0 && (
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600">Shipping</span>
-                  <span className="font-semibold text-gray-900">${receipt.shipping.toFixed(2)}</span>
+                  <span className="font-semibold text-gray-900">{formatPhpCurrency(receipt.shipping)}</span>
                 </div>
               )}
               <div className="flex justify-between pt-3 border-t border-gray-200">
                 <span className="text-lg font-bold text-gray-900">Total Amount</span>
-                <span className="text-3xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">${receipt.total.toFixed(2)}</span>
+                <span className="text-3xl font-bold bg-gradient-to-r from-green-600 to-green-700 bg-clip-text text-transparent">{formatPhpCurrency(receipt.total)}</span>
               </div>
             </div>
 
             {/* Footer */}
             <div className="text-center text-sm text-gray-500 mb-8">
               <p>Thank you for your business!</p>
-              <p className="mt-1">For support, contact us at support@agrihub.com</p>
+              <p className="mt-1">For support, contact us at agrihub183@gmail.com</p>
             </div>
 
             {/* Actions */}
-            <div className="flex space-x-4">
+            <div className="flex">
               <button
-                onClick={handlePrint}
-                className="flex-1 bg-gray-100 text-gray-700 py-3 rounded-xl hover:bg-gray-200 transition-all duration-200 flex items-center justify-center space-x-2 font-medium"
-              >
-                <Printer className="w-5 h-5" />
-                <span>Print</span>
-              </button>
-              <button
-                onClick={handleDownload}
+                onClick={onClose}
                 className="flex-1 bg-gradient-to-r from-green-500 to-green-600 text-white py-3 rounded-xl hover:shadow-lg hover:shadow-green-500/30 transition-all duration-200 flex items-center justify-center space-x-2 font-medium"
               >
-                <Download className="w-5 h-5" />
-                <span>Download PDF</span>
+                <span>Confirm</span>
               </button>
             </div>
           </div>

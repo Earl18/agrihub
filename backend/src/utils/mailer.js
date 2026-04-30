@@ -142,3 +142,41 @@ This code expires in 15 minutes. Your account email will only be updated after t
     `,
   });
 }
+
+export async function sendPhoneVerificationCodeEmail({ toEmail, code, name, phone }) {
+  const transporter = await getTransporter();
+  const from = process.env.SMTP_FROM?.trim() || requireMailEnv('SMTP_USER');
+  const appName = 'AgriHub';
+  const greetingName = name?.trim() || 'there';
+  const formattedPhone = String(phone || '').trim() || 'the phone number on your account';
+
+  await transporter.sendMail({
+    from,
+    to: toEmail,
+    subject: `${appName} phone verification code`,
+    text: `Hello ${greetingName},
+
+We received a request to verify the phone number on your AgriHub account.
+
+Phone number: ${formattedPhone}
+Verification code: ${code}
+
+This code expires in 15 minutes. If you did not request this change, you can ignore this email.
+`,
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #0f172a; line-height: 1.6;">
+        <h2 style="margin-bottom: 8px;">Verify your AgriHub phone number</h2>
+        <p>Hello ${greetingName},</p>
+        <p>We received a request to verify the phone number on your AgriHub account.</p>
+        <p><strong>Phone number:</strong> ${formattedPhone}</p>
+        <p style="margin: 24px 0;">
+          <span style="display: inline-block; padding: 12px 18px; border-radius: 12px; background: #16a34a; color: white; font-size: 24px; font-weight: 700; letter-spacing: 4px;">
+            ${code}
+          </span>
+        </p>
+        <p>This code expires in 15 minutes.</p>
+        <p>If you did not request this change, you can ignore this email.</p>
+      </div>
+    `,
+  });
+}

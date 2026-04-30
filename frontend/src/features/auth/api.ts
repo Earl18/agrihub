@@ -33,6 +33,13 @@ type AuthUser = {
     penalizedBy?: string;
   };
   canManageCommercialFeatures?: boolean;
+  phone?: string;
+  phoneVerification?: {
+    status?: 'unverified' | 'verified';
+    source?: string;
+    verifiedAt?: string | null;
+    requestedAt?: string | null;
+  };
 };
 
 type AuthResponse = {
@@ -56,7 +63,7 @@ export function loginUser(email: string, password: string) {
 export function registerUser(payload: {
   name: string;
   email: string;
-  phone: string;
+  phone?: string;
   password: string;
   profile?: {
     firstName?: string;

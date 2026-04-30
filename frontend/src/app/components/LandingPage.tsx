@@ -13,8 +13,11 @@ import {
 import { Notifications } from './Notifications';
 import {
   AppNotification,
+  clearStoredNotifications,
+  deleteStoredNotification,
+  getNotificationsUpdatedEventName,
   getStoredNotifications,
-  saveNotifications,
+  markStoredNotificationRead,
 } from '../../shared/notifications/store';
 
 export function LandingPage() {
@@ -32,38 +35,44 @@ export function LandingPage() {
   }, [loggedIn, navigate, sessionUser]);
 
   useEffect(() => {
-    setNotifications(getStoredNotifications());
+    setNotifications(sessionUser?.id ? getStoredNotifications(sessionUser.id) : []);
 
     const handleNotificationsUpdated = () => {
-      setNotifications(getStoredNotifications());
+      const nextUser = getSessionUser();
+      setNotifications(nextUser?.id ? getStoredNotifications(nextUser.id) : []);
     };
 
-    window.addEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+    window.addEventListener(getNotificationsUpdatedEventName(), handleNotificationsUpdated);
 
     return () => {
-      window.removeEventListener('agrihub:notifications-updated', handleNotificationsUpdated);
+      window.removeEventListener(getNotificationsUpdatedEventName(), handleNotificationsUpdated);
     };
-  }, []);
+  }, [sessionUser?.id]);
 
   const unreadCount = notifications.filter((notification) => !notification.read).length;
 
-  const handleMarkAsRead = (id: number) => {
-    const nextNotifications = notifications.map((notification) =>
-      notification.id === id ? { ...notification, read: true } : notification,
-    );
-    setNotifications(nextNotifications);
-    saveNotifications(nextNotifications);
+  const handleMarkAsRead = (id: string) => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    markStoredNotificationRead(sessionUser.id, id);
   };
 
-  const handleDeleteNotification = (id: number) => {
-    const nextNotifications = notifications.filter((notification) => notification.id !== id);
-    setNotifications(nextNotifications);
-    saveNotifications(nextNotifications);
+  const handleDeleteNotification = (id: string) => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    deleteStoredNotification(sessionUser.id, id);
   };
 
   const handleClearAllNotifications = () => {
-    setNotifications([]);
-    saveNotifications([]);
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    clearStoredNotifications(sessionUser.id);
   };
 
   const handleBecomeSeller = () => {

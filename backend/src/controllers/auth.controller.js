@@ -14,7 +14,10 @@ import {
   isSuperAdminEmail,
 } from '../utils/roles.js';
 import { appendActivity } from '../utils/activityLog.js';
-import { sendEmailVerificationCode, sendPasswordResetCode } from '../utils/mailer.js';
+import {
+  sendEmailVerificationCode,
+  sendPasswordResetCode,
+} from '../utils/mailer.js';
 import {
   createProfileAvatarSignedUrl,
   extractProfileAvatarPath,
@@ -40,6 +43,15 @@ async function sanitizeProfile(profile) {
   }
 }
 
+function buildPhoneVerificationState(user) {
+  return {
+    status: user?.phoneVerification?.status === 'verified' ? 'verified' : 'unverified',
+    source: user?.phoneVerification?.source || 'email',
+    verifiedAt: user?.phoneVerification?.verifiedAt || null,
+    requestedAt: user?.phoneVerification?.requestedAt || null,
+  };
+}
+
 async function sanitizeUser(user) {
   return {
     id: user._id.toString(),
@@ -48,6 +60,9 @@ async function sanitizeUser(user) {
     emailVerified: Boolean(user.emailVerified),
     role: user.role,
     accountType: user.accountType,
+    accountStatus: user.accountStatus || 'active',
+    disabledAt: user.disabledAt || null,
+    disabledReason: user.disabledReason || '',
     roles: getUserRoles(user),
     isAdmin: hasRole(user, 'admin'),
     isSuperAdmin: isSuperAdmin(user),
@@ -55,6 +70,13 @@ async function sanitizeUser(user) {
     penalty: getPenaltyState(user),
     canManageCommercialFeatures: canManageCommercialFeatures(user),
     phone: user.phone,
+    phoneChangePending: user?.phoneVerification?.pendingPhone
+      ? {
+          phone: user.phoneVerification.pendingPhone,
+          requestedAt: user?.phoneVerification?.requestedAt || null,
+        }
+      : null,
+    phoneVerification: buildPhoneVerificationState(user),
     profile: await sanitizeProfile(user.profile),
   };
 }
@@ -307,6 +329,12 @@ export async function login(req, res, next) {
       });
     }
 
+    if (user.accountStatus === 'disabled') {
+      return res.status(403).json({
+        message: 'This account has been disabled. Please contact support.',
+      });
+    }
+
     if (ensurePrivilegedAccess(user)) {
       await user.save();
     }
@@ -364,6 +392,7 @@ export async function googleLogin(req, res, next) {
         email: normalizedEmail,
         googleId: payload.sub,
         emailVerified: payload.email_verified !== false,
+        accountStatus: 'active',
         role,
         roles: role === 'admin' ? ['buyer', 'admin'] : ['buyer'],
         accountType: role === 'admin' ? 'admin' : 'customer',
@@ -375,6 +404,12 @@ export async function googleLogin(req, res, next) {
       });
     } else {
       let changed = false;
+
+      if (user.accountStatus === 'disabled') {
+        return res.status(403).json({
+          message: 'This account has been disabled. Please contact support.',
+        });
+      }
 
       if (!user.googleId) {
         user.googleId = payload.sub;
@@ -456,6 +491,17 @@ export async function verifyRegistrationCode(req, res, next) {
     }
 
     user.emailVerified = true;
+    if (String(user.phone || '').trim()) {
+      user.phoneVerification = {
+        status: 'verified',
+        source: 'email',
+        code: '',
+        expiresAt: null,
+        requestedAt: user.emailVerification?.requestedAt || null,
+        verifiedAt: new Date(),
+        pendingPhone: '',
+      };
+    }
     user.emailVerification = {
       code: '',
       expiresAt: null,

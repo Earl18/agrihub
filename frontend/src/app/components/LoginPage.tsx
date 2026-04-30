@@ -42,7 +42,6 @@ export function LoginPage() {
   const [resetLoading, setResetLoading] = useState(false);
   const [resetError, setResetError] = useState('');
   const [resetSuccess, setResetSuccess] = useState('');
-
   useEffect(() => {
     let isMounted = true;
 
@@ -320,7 +319,7 @@ export function LoginPage() {
               ) : null}
 
               <div>
-                <label className="block text-sm text-gray-700 mb-1.5">Email or Phone</label>
+                <label className="block text-sm text-gray-700 mb-1.5">Email</label>
                 <div className="relative">
                   <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-gray-400" />
                   <input
@@ -584,6 +583,7 @@ export function LoginPage() {
           </div>
         </div>
       ) : null}
+
     </div>
   );
 }

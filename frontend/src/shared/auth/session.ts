@@ -3,6 +3,9 @@ export type SessionUser = {
   name: string;
   email: string;
   emailVerified?: boolean;
+  accountStatus?: 'active' | 'disabled';
+  disabledAt?: string | null;
+  disabledReason?: string;
   role?: string;
   accountType?: string;
   roles?: string[];
@@ -51,6 +54,16 @@ export type SessionUser = {
   };
   emailChangePending?: {
     email?: string;
+    requestedAt?: string | null;
+  } | null;
+  phoneVerification?: {
+    status?: 'unverified' | 'verified';
+    source?: string;
+    verifiedAt?: string | null;
+    requestedAt?: string | null;
+  };
+  phoneChangePending?: {
+    phone?: string;
     requestedAt?: string | null;
   } | null;
   penalty?: {
@@ -191,5 +204,9 @@ export function getAuthenticatedHomeRoute(user?: SessionUser | null) {
 }
 
 export function getLogoHomeRoute(user?: SessionUser | null) {
+  if (!user) {
+    return '/';
+  }
+
   return '/app';
 }

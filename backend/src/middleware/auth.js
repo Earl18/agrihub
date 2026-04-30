@@ -26,6 +26,12 @@ async function resolveUserFromHeader(authHeader = '') {
     await user.save();
   }
 
+  if (user.accountStatus === 'disabled') {
+    const error = new Error('This account has been disabled.');
+    error.name = 'AccountDisabledError';
+    throw error;
+  }
+
   return user;
 }
 
@@ -48,6 +54,12 @@ export async function requireAuth(req, res, next) {
       });
     }
 
+    if (error.name === 'AccountDisabledError') {
+      return res.status(403).json({
+        message: 'This account has been disabled. Please contact support.',
+      });
+    }
+
     return next(error);
   }
 }
@@ -58,6 +70,11 @@ export async function optionalAuth(req, _res, next) {
     return next();
   } catch (error) {
     if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      req.user = null;
+      return next();
+    }
+
+    if (error.name === 'AccountDisabledError') {
       req.user = null;
       return next();
     }

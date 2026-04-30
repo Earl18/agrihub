@@ -27,8 +27,11 @@ const marketplaceListingSchema = new mongoose.Schema(
 
 const laborBookingSchema = new mongoose.Schema(
   {
+    bookingId: String,
     worker: String,
     workerId: String,
+    workerEmail: String,
+    workerPhone: String,
     type: String,
     date: String,
     time: String,
@@ -40,6 +43,82 @@ const laborBookingSchema = new mongoose.Schema(
     rating: Number,
     bookedByUserId: String,
     bookedByName: String,
+    bookedByEmail: String,
+    bookedByPhone: String,
+    travelTracking: {
+      isOnTheWay: {
+        type: Boolean,
+        default: false,
+      },
+      startedAt: {
+        type: Date,
+        default: null,
+      },
+      updatedAt: {
+        type: Date,
+        default: null,
+      },
+      currentLocation: {
+        lat: {
+          type: Number,
+          default: null,
+        },
+        lng: {
+          type: Number,
+          default: null,
+        },
+      },
+    },
+  },
+  { _id: false },
+);
+
+const laborOfferSchema = new mongoose.Schema(
+  {
+    title: {
+      type: String,
+      default: '',
+    },
+    description: {
+      type: String,
+      default: '',
+    },
+    workerType: {
+      type: String,
+      default: '',
+    },
+    rate: {
+      type: Number,
+      default: 0,
+    },
+    availability: {
+      type: String,
+      default: 'Available',
+    },
+    skills: {
+      type: [String],
+      default: [],
+    },
+    distance: {
+      type: String,
+      default: '',
+    },
+    serviceArea: {
+      type: String,
+      default: '',
+    },
+    workingHoursStart: {
+      type: String,
+      default: '',
+    },
+    workingHoursEnd: {
+      type: String,
+      default: '',
+    },
+    isPublished: {
+      type: Boolean,
+      default: false,
+    },
   },
   { _id: false },
 );
@@ -172,6 +251,10 @@ const roleVerificationSchema = new mongoose.Schema(
         type: String,
         default: '',
       },
+      profileAddress: {
+        type: String,
+        default: '',
+      },
       addressConfirmed: {
         type: Boolean,
         default: false,
@@ -218,7 +301,7 @@ const activityLogSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['completed', 'confirmed', 'pending'],
+      enum: ['completed', 'confirmed', 'pending', 'cancelled'],
       default: 'confirmed',
     },
     createdAt: {
@@ -273,6 +356,43 @@ const emailVerificationSchema = new mongoose.Schema(
       type: String,
       default: '',
       lowercase: true,
+      trim: true,
+    },
+  },
+  { _id: false },
+);
+
+const phoneVerificationSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      enum: ['unverified', 'verified'],
+      default: 'unverified',
+    },
+    source: {
+      type: String,
+      default: 'email',
+      trim: true,
+    },
+    code: {
+      type: String,
+      default: '',
+    },
+    expiresAt: {
+      type: Date,
+      default: null,
+    },
+    requestedAt: {
+      type: Date,
+      default: null,
+    },
+    verifiedAt: {
+      type: Date,
+      default: null,
+    },
+    pendingPhone: {
+      type: String,
+      default: '',
       trim: true,
     },
   },
@@ -393,6 +513,38 @@ const userSchema = new mongoose.Schema(
       enum: ['customer', 'vendor', 'laborer', 'service', 'operations', 'admin'],
       default: 'customer',
     },
+    accountStatus: {
+      type: String,
+      enum: ['active', 'disabled'],
+      default: 'active',
+    },
+    disabledAt: {
+      type: Date,
+      default: null,
+    },
+    disabledReason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    pendingDisableAt: {
+      type: Date,
+      default: null,
+    },
+    pendingDisableReason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    pendingDeleteAt: {
+      type: Date,
+      default: null,
+    },
+    pendingDeleteReason: {
+      type: String,
+      default: '',
+      trim: true,
+    },
     verification: {
       seller: {
         type: roleVerificationSchema,
@@ -413,6 +565,10 @@ const userSchema = new mongoose.Schema(
     },
     emailVerification: {
       type: emailVerificationSchema,
+      default: () => ({}),
+    },
+    phoneVerification: {
+      type: phoneVerificationSchema,
       default: () => ({}),
     },
     penalty: {
@@ -542,6 +698,14 @@ const userSchema = new mongoose.Schema(
       },
     },
     laborProfile: {
+      title: {
+        type: String,
+        default: '',
+      },
+      description: {
+        type: String,
+        default: '',
+      },
       workerType: {
         type: String,
         default: '',
@@ -562,9 +726,21 @@ const userSchema = new mongoose.Schema(
         type: String,
         default: '',
       },
+      serviceArea: {
+        type: String,
+        default: '',
+      },
       rating: {
         type: Number,
         default: 0,
+      },
+      isPublished: {
+        type: Boolean,
+        default: false,
+      },
+      listings: {
+        type: [laborOfferSchema],
+        default: [],
       },
       activeBookings: {
         type: [laborBookingSchema],
