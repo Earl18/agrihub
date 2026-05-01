@@ -69,6 +69,24 @@ const laborBookingSchema = new mongoose.Schema(
         },
       },
     },
+    completionConfirmation: {
+      clientConfirmedAt: {
+        type: Date,
+        default: null,
+      },
+      workerConfirmedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+    completedAt: {
+      type: Date,
+      default: null,
+    },
+    cancelledAt: {
+      type: Date,
+      default: null,
+    },
   },
   { _id: false },
 );
@@ -399,6 +417,108 @@ const phoneVerificationSchema = new mongoose.Schema(
   { _id: false },
 );
 
+const paymentMethodSchema = new mongoose.Schema(
+  {
+    accountName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    mobileNumber: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    cardholderName: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    brand: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    last4: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+  },
+  { _id: false },
+);
+
+const walletTransactionSchema = new mongoose.Schema(
+  {
+    id: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    type: {
+      type: String,
+      enum: ['credit', 'cashout'],
+      required: true,
+    },
+    amount: {
+      type: Number,
+      default: 0,
+    },
+    status: {
+      type: String,
+      enum: ['completed', 'pending', 'failed'],
+      default: 'completed',
+    },
+    method: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    description: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    reference: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    destinationLabel: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    createdAt: {
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { _id: false },
+);
+
+const walletSchema = new mongoose.Schema(
+  {
+    balance: {
+      type: Number,
+      default: 0,
+    },
+    totalEarned: {
+      type: Number,
+      default: 0,
+    },
+    totalWithdrawn: {
+      type: Number,
+      default: 0,
+    },
+    transactions: {
+      type: [walletTransactionSchema],
+      default: [],
+    },
+  },
+  { _id: false },
+);
+
 const penaltySchema = new mongoose.Schema(
   {
     status: {
@@ -569,6 +689,24 @@ const userSchema = new mongoose.Schema(
     },
     phoneVerification: {
       type: phoneVerificationSchema,
+      default: () => ({}),
+    },
+    paymentMethods: {
+      gcash: {
+        type: paymentMethodSchema,
+        default: () => ({}),
+      },
+      paymaya: {
+        type: paymentMethodSchema,
+        default: () => ({}),
+      },
+      card: {
+        type: paymentMethodSchema,
+        default: () => ({}),
+      },
+    },
+    wallet: {
+      type: walletSchema,
       default: () => ({}),
     },
     penalty: {

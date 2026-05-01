@@ -62,6 +62,22 @@ export type SessionUser = {
     verifiedAt?: string | null;
     requestedAt?: string | null;
   };
+  wallet?: {
+    balance?: number;
+    totalEarned?: number;
+    totalWithdrawn?: number;
+    transactions?: Array<{
+      id?: string;
+      type?: string;
+      amount?: number;
+      status?: string;
+      method?: string;
+      description?: string;
+      reference?: string;
+      destinationLabel?: string;
+      createdAt?: string | null;
+    }>;
+  };
   phoneChangePending?: {
     phone?: string;
     requestedAt?: string | null;

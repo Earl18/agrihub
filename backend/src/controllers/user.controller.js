@@ -1,4 +1,5 @@
 import { User } from '../models/User.js';
+import { LaborPayment } from '../models/LaborPayment.js';
 import { appendActivity, getUserActivities } from '../utils/activityLog.js';
 import {
   sendEmailChangeVerificationCode,
@@ -51,6 +52,146 @@ function buildPhoneVerificationState(user) {
   };
 }
 
+function buildWalletSummary(user) {
+  const wallet = user?.wallet || {};
+  const transactions = Array.isArray(wallet?.transactions) ? wallet.transactions : [];
+
+  return {
+    balance: Number(wallet?.balance || 0),
+    totalEarned: Number(wallet?.totalEarned || 0),
+    totalWithdrawn: Number(wallet?.totalWithdrawn || 0),
+    transactions: transactions
+      .map((transaction) => ({
+        id: String(transaction?.id || '').trim(),
+        type: String(transaction?.type || '').trim(),
+        amount: Number(transaction?.amount || 0),
+        status: String(transaction?.status || 'completed').trim(),
+        method: String(transaction?.method || '').trim(),
+        description: String(transaction?.description || '').trim(),
+        reference: String(transaction?.reference || '').trim(),
+        destinationLabel: String(transaction?.destinationLabel || '').trim(),
+        createdAt: transaction?.createdAt || null,
+      }))
+      .filter((transaction) => transaction.id)
+      .sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()),
+  };
+}
+
+function ensureWalletState(user) {
+  if (!user.wallet) {
+    user.wallet = {
+      balance: 0,
+      totalEarned: 0,
+      totalWithdrawn: 0,
+      transactions: [],
+    };
+  }
+
+  user.wallet.balance = Number(user.wallet.balance || 0);
+  user.wallet.totalEarned = Number(user.wallet.totalEarned || 0);
+  user.wallet.totalWithdrawn = Number(user.wallet.totalWithdrawn || 0);
+
+  if (!Array.isArray(user.wallet.transactions)) {
+    user.wallet.transactions = [];
+  }
+
+  return user.wallet;
+}
+
+function buildWalletTransactionId(prefix = 'WAL') {
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+}
+
+function addWalletTransaction(user, transaction) {
+  const wallet = ensureWalletState(user);
+  wallet.transactions = [
+    {
+      id: transaction.id || buildWalletTransactionId(),
+      type: transaction.type,
+      amount: Number(transaction.amount || 0),
+      status: transaction.status || 'completed',
+      method: transaction.method || '',
+      description: transaction.description || '',
+      reference: transaction.reference || '',
+      destinationLabel: transaction.destinationLabel || '',
+      createdAt: transaction.createdAt || new Date(),
+    },
+    ...wallet.transactions,
+  ].slice(0, 100);
+}
+
+function creditWallet(user, amount, transaction = {}) {
+  const numericAmount = Number(amount || 0);
+
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return;
+  }
+
+  const wallet = ensureWalletState(user);
+  wallet.balance += numericAmount;
+  wallet.totalEarned += numericAmount;
+  addWalletTransaction(user, {
+    ...transaction,
+    type: 'credit',
+    amount: numericAmount,
+    status: transaction.status || 'completed',
+  });
+}
+
+function debitWalletForCashOut(user, amount, transaction = {}) {
+  const numericAmount = Number(amount || 0);
+
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    throw new Error('Enter a valid cash-out amount.');
+  }
+
+  const wallet = ensureWalletState(user);
+
+  if (wallet.balance < numericAmount) {
+    throw new Error('Insufficient wallet balance for this cash out.');
+  }
+
+  wallet.balance -= numericAmount;
+  wallet.totalWithdrawn += numericAmount;
+  addWalletTransaction(user, {
+    ...transaction,
+    type: 'cashout',
+    amount: numericAmount,
+    status: transaction.status || 'completed',
+  });
+}
+
+function normalizeCashOutDestination(payload = {}) {
+  const method = String(payload?.method || '').trim().toLowerCase();
+  const accountName = String(payload?.accountName || '').trim();
+  const mobileNumber = normalizePhilippinePhone(payload?.mobileNumber || '');
+  const cardholderName = String(payload?.cardholderName || '').trim();
+  const cardBrand = String(payload?.cardBrand || '').trim();
+  const cardLast4 = String(payload?.cardLast4 || '').replace(/\D/g, '').slice(-4);
+
+  return {
+    method,
+    accountName,
+    mobileNumber,
+    cardholderName,
+    cardBrand,
+    cardLast4,
+  };
+}
+
+function buildCashOutDestinationLabel(destination) {
+  if (destination.method === 'gcash' || destination.method === 'paymaya') {
+    return [destination.accountName, destination.mobileNumber].filter(Boolean).join(' - ');
+  }
+
+  if (destination.method === 'card') {
+    const masked = destination.cardLast4 ? `**** ${destination.cardLast4}` : '';
+    return [destination.cardBrand, masked, destination.cardholderName].filter(Boolean).join(' - ');
+  }
+
+  return '';
+}
+
 async function sanitizeUser(user) {
   return {
     id: user._id.toString(),
@@ -86,6 +227,7 @@ async function sanitizeUser(user) {
         }
       : null,
     phoneVerification: buildPhoneVerificationState(user),
+    wallet: buildWalletSummary(user),
     penalty: getPenaltyState(user),
     canManageCommercialFeatures: canManageCommercialFeatures(user),
     profile: await sanitizeProfile(user.profile),
@@ -435,6 +577,43 @@ function getDurationHours(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function hasLaborBookingTimeConflict(bookings = [], date, requestedStartMinutes, requestedDurationHours, ignoreBookingId = '') {
+  const normalizedDate = String(date || '').trim();
+  const normalizedIgnoreBookingId = String(ignoreBookingId || '').trim();
+  const requestedEndMinutes = requestedStartMinutes + requestedDurationHours * 60;
+
+  return bookings.some((booking) => {
+    if (!booking) {
+      return false;
+    }
+
+    const bookingId = String(booking.bookingId || '').trim();
+
+    if (normalizedIgnoreBookingId && bookingId === normalizedIgnoreBookingId) {
+      return false;
+    }
+
+    if (String(booking.date || '').trim() !== normalizedDate) {
+      return false;
+    }
+
+    if (String(booking.status || '').trim().toLowerCase() === 'cancelled') {
+      return false;
+    }
+
+    const existingStartMinutes = convertClockTimeToMinutes(booking.time);
+    const existingDurationHours = getDurationHours(booking.duration);
+
+    if (existingStartMinutes === null || existingDurationHours === null) {
+      return false;
+    }
+
+    const existingEndMinutes = existingStartMinutes + existingDurationHours * 60;
+
+    return requestedStartMinutes <= existingEndMinutes && existingStartMinutes <= requestedEndMinutes;
+  });
+}
+
 function buildLaborBookingId() {
   return `LB-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
 }
@@ -594,6 +773,86 @@ export async function getCurrentUser(req, res) {
     user: await sanitizeUser(req.user),
     stats: getProfileStats(req.user),
   });
+}
+
+export async function getWalletSummary(req, res) {
+  res.json({
+    wallet: buildWalletSummary(req.user),
+  });
+}
+
+export async function requestWalletCashOut(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: 'Authentication required.',
+      });
+    }
+
+    const amount = Number(req.body?.amount || 0);
+    const destination = normalizeCashOutDestination(req.body || {});
+
+    if (!['gcash', 'paymaya', 'card'].includes(destination.method)) {
+      return res.status(400).json({
+        message: 'Choose GCash, PayMaya, or card for cash out.',
+      });
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({
+        message: 'Enter a valid cash-out amount.',
+      });
+    }
+
+    if ((destination.method === 'gcash' || destination.method === 'paymaya')) {
+      if (!destination.accountName || !destination.mobileNumber) {
+        return res.status(400).json({
+          message: 'Account name and mobile number are required for wallet cash outs.',
+        });
+      }
+
+      if (!isValidPhilippineMobile(destination.mobileNumber)) {
+        return res.status(400).json({
+          message: 'Enter a valid Philippine mobile number for wallet cash out.',
+        });
+      }
+    }
+
+    if (destination.method === 'card') {
+      if (!destination.cardholderName || !destination.cardBrand || destination.cardLast4.length !== 4) {
+        return res.status(400).json({
+          message: 'Cardholder name, card brand, and last 4 digits are required for card cash out.',
+        });
+      }
+    }
+
+    const reference = buildWalletTransactionId('CASHOUT');
+    const destinationLabel = buildCashOutDestinationLabel(destination);
+
+    debitWalletForCashOut(req.user, amount, {
+      id: reference,
+      method: destination.method,
+      reference,
+      destinationLabel,
+      description: `Cash out to ${destination.method === 'paymaya' ? 'PayMaya' : destination.method === 'gcash' ? 'GCash' : 'card'}`,
+      status: 'completed',
+    });
+
+    appendActivity(req.user, {
+      description: `Cashed out ${formatPhpCurrency(amount)} from wallet`,
+      status: 'completed',
+    });
+
+    await req.user.save();
+
+    return res.json({
+      message: 'Wallet cash out completed successfully.',
+      wallet: buildWalletSummary(req.user),
+      user: await sanitizeUser(req.user),
+    });
+  } catch (error) {
+    next(error);
+  }
 }
 
 export async function updateCurrentUser(req, res, next) {
@@ -1351,13 +1610,22 @@ export async function getLaborData(req, res, next) {
             skills: listing.skills,
             distance: listing.distance,
             serviceArea: listing.serviceArea,
-            location: laborer.profile.location,
-            email: laborer.email,
-            phone: laborer.phone,
-            workingHoursStart: listing.workingHoursStart,
-              workingHoursEnd: listing.workingHoursEnd,
-              workingHoursLabel: formatWorkingHoursRange(listing.workingHoursStart, listing.workingHoursEnd),
-            })),
+              location: laborer.profile.location,
+              email: laborer.email,
+              phone: laborer.phone,
+              bookedSlots: (Array.isArray(laborer.laborProfile?.activeBookings) ? laborer.laborProfile.activeBookings : [])
+                .map((booking) => ({
+                  bookingId: String(booking?.bookingId || '').trim(),
+                  date: String(booking?.date || '').trim(),
+                  time: String(booking?.time || '').trim(),
+                  duration: String(booking?.duration || '').trim(),
+                  status: String(booking?.status || '').trim(),
+                }))
+                .filter((booking) => booking.date && booking.time && booking.duration),
+              workingHoursStart: listing.workingHoursStart,
+                workingHoursEnd: listing.workingHoursEnd,
+                workingHoursLabel: formatWorkingHoursRange(listing.workingHoursStart, listing.workingHoursEnd),
+              })),
         ),
         viewerProvince,
         activeBookings: currentUserActiveBookings.map((booking, bookingIndex) => ({
@@ -1600,6 +1868,22 @@ export async function createLaborBooking(req, res, next) {
       });
     }
 
+    if (durationHoursValue === null) {
+      return res.status(400).json({
+        message: 'Choose a valid booking duration in whole hours.',
+      });
+    }
+
+    const workerActiveBookings = Array.isArray(worker?.laborProfile?.activeBookings)
+      ? worker.laborProfile.activeBookings
+      : [];
+
+    if (hasLaborBookingTimeConflict(workerActiveBookings, date, requestedTimeMinutes, durationHoursValue)) {
+      return res.status(409).json({
+        message: 'This worker is already booked for part of that time range on the selected date.',
+      });
+    }
+
     const buyerBooking = {
       bookingId,
       worker: worker.name,
@@ -1763,6 +2047,260 @@ export async function markLaborBookingOnTheWay(req, res, next) {
   }
 }
 
+export async function markLaborBookingCompleted(req, res, next) {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        message: 'Authentication required.',
+      });
+    }
+
+    const bookingId = String(req.params?.bookingId || req.body?.bookingId || '').trim();
+
+    if (!bookingId) {
+      return res.status(400).json({
+        message: 'A booking reference is required.',
+      });
+    }
+
+    const buyerActiveBookings = Array.isArray(req.user?.laborBookings?.activeBookings)
+      ? req.user.laborBookings.activeBookings
+      : [];
+    const workerActiveBookings = Array.isArray(req.user?.laborProfile?.activeBookings)
+      ? req.user.laborProfile.activeBookings
+      : [];
+
+    const buyerBookingIndex = buyerActiveBookings.findIndex(
+      (booking) => String(booking?.bookingId || '').trim() === bookingId,
+    );
+    const workerBookingIndex = workerActiveBookings.findIndex(
+      (booking) => String(booking?.bookingId || '').trim() === bookingId,
+    );
+
+    const isBuyerConfirming = buyerBookingIndex >= 0;
+    const isWorkerConfirming = workerBookingIndex >= 0;
+
+    if (!isBuyerConfirming && !isWorkerConfirming) {
+      return res.status(404).json({
+        message: 'That active labor booking could not be found on this account.',
+      });
+    }
+
+    const sourceBooking = isBuyerConfirming
+      ? buyerActiveBookings[buyerBookingIndex]
+      : workerActiveBookings[workerBookingIndex];
+
+    if (String(sourceBooking?.date || '').trim() !== getCurrentManilaDateString()) {
+      return res.status(409).json({
+        message: 'Labor bookings can only be marked as completed on the booked date.',
+      });
+    }
+
+    if (String(sourceBooking?.status || '').trim() === 'cancelled') {
+      return res.status(409).json({
+        message: 'Cancelled labor bookings cannot be marked as completed.',
+      });
+    }
+
+    const counterpartUserId = isBuyerConfirming
+      ? String(sourceBooking?.workerId || '').trim()
+      : String(sourceBooking?.bookedByUserId || '').trim();
+
+    const counterpartUser = counterpartUserId ? await User.findById(counterpartUserId) : null;
+
+    if (!counterpartUser) {
+      return res.status(404).json({
+        message: 'The other party for this labor booking could not be found.',
+      });
+    }
+
+    if (!counterpartUser.laborBookings) {
+      counterpartUser.laborBookings = {
+        activeBookings: [],
+        bookingHistory: [],
+      };
+    }
+
+    if (!counterpartUser.laborProfile) {
+      counterpartUser.laborProfile = {
+        activeBookings: [],
+        bookingHistory: [],
+      };
+    }
+
+    const counterpartActiveBookings = isBuyerConfirming
+      ? Array.isArray(counterpartUser?.laborProfile?.activeBookings)
+        ? counterpartUser.laborProfile.activeBookings
+        : []
+      : Array.isArray(counterpartUser?.laborBookings?.activeBookings)
+        ? counterpartUser.laborBookings.activeBookings
+        : [];
+
+    const counterpartBookingIndex = counterpartActiveBookings.findIndex(
+      (booking) => String(booking?.bookingId || '').trim() === bookingId,
+    );
+
+    if (counterpartBookingIndex < 0) {
+      return res.status(404).json({
+        message: 'The matching labor booking record could not be found for the other party.',
+      });
+    }
+
+    const counterpartBooking = counterpartActiveBookings[counterpartBookingIndex];
+    const confirmationTime = new Date();
+
+    const localBookingSnapshot = sourceBooking.toObject?.() || sourceBooking;
+    const counterpartBookingSnapshot = counterpartBooking.toObject?.() || counterpartBooking;
+
+    const nextLocalConfirmation = {
+      ...(localBookingSnapshot.completionConfirmation || {}),
+      ...(isBuyerConfirming
+        ? { clientConfirmedAt: confirmationTime }
+        : { workerConfirmedAt: confirmationTime }),
+    };
+    const nextCounterpartConfirmation = {
+      ...(counterpartBookingSnapshot.completionConfirmation || {}),
+      ...(isBuyerConfirming
+        ? { clientConfirmedAt: confirmationTime }
+        : { workerConfirmedAt: confirmationTime }),
+    };
+
+    const clientConfirmedAt = nextLocalConfirmation.clientConfirmedAt || nextCounterpartConfirmation.clientConfirmedAt;
+    const workerConfirmedAt = nextLocalConfirmation.workerConfirmedAt || nextCounterpartConfirmation.workerConfirmedAt;
+    const bothConfirmed = Boolean(clientConfirmedAt && workerConfirmedAt);
+
+    const nextLocalBooking = {
+      ...localBookingSnapshot,
+      completionConfirmation: {
+        clientConfirmedAt: clientConfirmedAt || null,
+        workerConfirmedAt: workerConfirmedAt || null,
+      },
+      completedAt: bothConfirmed ? confirmationTime : localBookingSnapshot.completedAt || null,
+      status: bothConfirmed ? 'completed' : localBookingSnapshot.status || 'confirmed',
+    };
+    const nextCounterpartBooking = {
+      ...counterpartBookingSnapshot,
+      completionConfirmation: {
+        clientConfirmedAt: clientConfirmedAt || null,
+        workerConfirmedAt: workerConfirmedAt || null,
+      },
+      completedAt: bothConfirmed ? confirmationTime : counterpartBookingSnapshot.completedAt || null,
+      status: bothConfirmed ? 'completed' : counterpartBookingSnapshot.status || 'confirmed',
+    };
+
+    if (isBuyerConfirming) {
+      req.user.laborBookings.activeBookings[buyerBookingIndex] = nextLocalBooking;
+      counterpartUser.laborProfile.activeBookings[counterpartBookingIndex] = nextCounterpartBooking;
+    } else {
+      req.user.laborProfile.activeBookings[workerBookingIndex] = nextLocalBooking;
+      counterpartUser.laborBookings.activeBookings[counterpartBookingIndex] = nextCounterpartBooking;
+    }
+
+    if (bothConfirmed) {
+      if (isBuyerConfirming) {
+        req.user.laborBookings.activeBookings = buyerActiveBookings.filter((_, index) => index !== buyerBookingIndex);
+        req.user.laborBookings.bookingHistory = [
+          ...(Array.isArray(req.user.laborBookings.bookingHistory) ? req.user.laborBookings.bookingHistory : []),
+          nextLocalBooking,
+        ];
+        counterpartUser.laborProfile.activeBookings = counterpartActiveBookings.filter(
+          (_, index) => index !== counterpartBookingIndex,
+        );
+        counterpartUser.laborProfile.bookingHistory = [
+          ...(Array.isArray(counterpartUser?.laborProfile?.bookingHistory)
+            ? counterpartUser.laborProfile.bookingHistory
+            : []),
+          nextCounterpartBooking,
+        ];
+      } else {
+        req.user.laborProfile.activeBookings = workerActiveBookings.filter((_, index) => index !== workerBookingIndex);
+        req.user.laborProfile.bookingHistory = [
+          ...(Array.isArray(req.user.laborProfile.bookingHistory) ? req.user.laborProfile.bookingHistory : []),
+          nextLocalBooking,
+        ];
+        counterpartUser.laborBookings.activeBookings = counterpartActiveBookings.filter(
+          (_, index) => index !== counterpartBookingIndex,
+        );
+        counterpartUser.laborBookings.bookingHistory = [
+          ...(Array.isArray(counterpartUser?.laborBookings?.bookingHistory)
+            ? counterpartUser.laborBookings.bookingHistory
+            : []),
+          nextCounterpartBooking,
+        ];
+      }
+
+      appendActivity(req.user, {
+        description: `Completed labor booking ${bookingId}`,
+        status: 'completed',
+      });
+      appendActivity(counterpartUser, {
+        description: `Completed labor booking ${bookingId}`,
+        status: 'completed',
+      });
+    } else {
+      appendActivity(req.user, {
+        description: `Confirmed completion for labor booking ${bookingId}`,
+        status: 'confirmed',
+      });
+    }
+
+    const laborPayment = await LaborPayment.findOne({ bookingId });
+
+    if (laborPayment) {
+      laborPayment.bookingId = bookingId;
+      if (bothConfirmed) {
+        const workerUser = isBuyerConfirming ? counterpartUser : req.user;
+
+        if (laborPayment.releaseStatus !== 'released') {
+          const releaseAmount = Number(laborPayment.subtotal || 0);
+
+          creditWallet(workerUser, releaseAmount, {
+            id: buildWalletTransactionId('WALLET'),
+            method: 'labor_payment',
+            reference: laborPayment.reference || bookingId,
+            description: `Labor earnings from booking ${bookingId}`,
+            destinationLabel: '',
+            status: 'completed',
+            createdAt: confirmationTime,
+          });
+
+          appendActivity(workerUser, {
+            description: `Wallet credited for labor booking ${bookingId}`,
+            status: 'completed',
+          });
+        }
+
+        laborPayment.status = 'released';
+        laborPayment.releaseStatus = 'released';
+        laborPayment.releasedAt = laborPayment.releasedAt || confirmationTime;
+        laborPayment.releaseFailureReason = '';
+      }
+      laborPayment.paidAt = laborPayment.paidAt || confirmationTime;
+      await laborPayment.save();
+    }
+
+    await Promise.all([req.user.save(), counterpartUser.save()]);
+
+    return res.json({
+      message: bothConfirmed
+        ? 'Both sides confirmed the labor booking. It has been marked as completed.'
+        : isBuyerConfirming
+          ? 'Your completion confirmation has been recorded. Waiting for the laborer to confirm.'
+          : 'Your completion confirmation has been recorded. Waiting for the client to confirm.',
+      booking: isBuyerConfirming
+        ? bothConfirmed
+          ? nextLocalBooking
+          : req.user.laborBookings.activeBookings[buyerBookingIndex]
+        : bothConfirmed
+          ? nextLocalBooking
+          : req.user.laborProfile.activeBookings[workerBookingIndex],
+      completed: bothConfirmed,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function cancelLaborBooking(req, res, next) {
   try {
     if (!req.user) {
@@ -1806,35 +2344,10 @@ export async function cancelLaborBooking(req, res, next) {
       ? buyerActiveBookings[buyerBookingIndex]
       : workerActiveBookings[workerBookingIndex];
 
-    const counterpartUserId = isBuyerCancelling
-      ? String(sourceBooking?.workerId || '').trim()
-      : String(sourceBooking?.bookedByUserId || '').trim();
-
-    const counterpartUser = counterpartUserId ? await User.findById(counterpartUserId) : null;
-
-    if (!counterpartUser) {
-      return res.status(404).json({
-        message: isBuyerCancelling
-          ? 'The worker account for this booking could not be found.'
-          : 'The client account for this booking could not be found.',
-      });
-    }
-
-    const counterpartActiveBookings = isBuyerCancelling
-      ? Array.isArray(counterpartUser?.laborProfile?.activeBookings)
-        ? counterpartUser.laborProfile.activeBookings
-        : []
-      : Array.isArray(counterpartUser?.laborBookings?.activeBookings)
-        ? counterpartUser.laborBookings.activeBookings
-        : [];
-
-    const counterpartBookingIndex = counterpartActiveBookings.findIndex(
-      (booking) => String(booking?.bookingId || '').trim() === bookingId,
-    );
-
-    if (counterpartBookingIndex < 0) {
-      return res.status(404).json({
-        message: 'The mirrored booking record could not be found.',
+    if (isBuyerCancelling && String(sourceBooking?.date || '').trim() === getCurrentManilaDateString()) {
+      return res.status(409).json({
+        message:
+          'This labor booking can no longer be cancelled on the booking date. The booked time remains payable whether the client is present or not.',
       });
     }
 
@@ -1844,12 +2357,6 @@ export async function cancelLaborBooking(req, res, next) {
       status: 'cancelled',
       cancelledAt,
       travelTracking: createTravelTrackingSnapshot(sourceBooking?.travelTracking),
-    };
-    const nextCounterpartCancelledBooking = {
-      ...(counterpartActiveBookings[counterpartBookingIndex].toObject?.() || counterpartActiveBookings[counterpartBookingIndex]),
-      status: 'cancelled',
-      cancelledAt,
-      travelTracking: createTravelTrackingSnapshot(counterpartActiveBookings[counterpartBookingIndex]?.travelTracking),
     };
 
     if (!req.user.laborBookings) {
@@ -1865,6 +2372,73 @@ export async function cancelLaborBooking(req, res, next) {
         bookingHistory: [],
       };
     }
+
+    const finalizeLocalCancellation = async (message) => {
+      if (isBuyerCancelling) {
+        req.user.laborBookings.activeBookings = buyerActiveBookings.filter((_, index) => index !== buyerBookingIndex);
+        req.user.laborBookings.bookingHistory = [
+          ...(Array.isArray(req.user.laborBookings.bookingHistory) ? req.user.laborBookings.bookingHistory : []),
+          nextCancelledBooking,
+        ];
+      } else {
+        req.user.laborProfile.activeBookings = workerActiveBookings.filter((_, index) => index !== workerBookingIndex);
+        req.user.laborProfile.bookingHistory = [
+          ...(Array.isArray(req.user.laborProfile.bookingHistory) ? req.user.laborProfile.bookingHistory : []),
+          nextCancelledBooking,
+        ];
+      }
+
+      appendActivity(req.user, {
+        description: `Cancelled labor booking ${bookingId}`,
+        status: 'cancelled',
+      });
+
+      await req.user.save();
+
+      return res.json({
+        message,
+        booking: nextCancelledBooking,
+      });
+    };
+
+    const counterpartUserId = isBuyerCancelling
+      ? String(sourceBooking?.workerId || '').trim()
+      : String(sourceBooking?.bookedByUserId || '').trim();
+
+    const counterpartUser = counterpartUserId ? await User.findById(counterpartUserId) : null;
+
+    if (!counterpartUser) {
+      return finalizeLocalCancellation(
+        isBuyerCancelling
+          ? 'Labor booking removed from your account. The worker record was no longer available.'
+          : 'Labor booking removed from your account. The client record was no longer available.',
+      );
+    }
+
+    const counterpartActiveBookings = isBuyerCancelling
+      ? Array.isArray(counterpartUser?.laborProfile?.activeBookings)
+        ? counterpartUser.laborProfile.activeBookings
+        : []
+      : Array.isArray(counterpartUser?.laborBookings?.activeBookings)
+        ? counterpartUser.laborBookings.activeBookings
+        : [];
+
+    const counterpartBookingIndex = counterpartActiveBookings.findIndex(
+      (booking) => String(booking?.bookingId || '').trim() === bookingId,
+    );
+
+    if (counterpartBookingIndex < 0) {
+      return finalizeLocalCancellation(
+        'Labor booking removed from your account. The mirrored booking record was no longer available.',
+      );
+    }
+
+    const nextCounterpartCancelledBooking = {
+      ...(counterpartActiveBookings[counterpartBookingIndex].toObject?.() || counterpartActiveBookings[counterpartBookingIndex]),
+      status: 'cancelled',
+      cancelledAt,
+      travelTracking: createTravelTrackingSnapshot(counterpartActiveBookings[counterpartBookingIndex]?.travelTracking),
+    };
 
     if (isBuyerCancelling) {
       req.user.laborBookings.activeBookings = buyerActiveBookings.filter((_, index) => index !== buyerBookingIndex);

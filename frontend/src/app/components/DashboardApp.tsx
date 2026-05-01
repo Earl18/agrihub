@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { LayoutDashboard, ShoppingBag, Users, Truck, Sprout, Menu, X, Bell, ShoppingCart as CartIcon, UserCircle } from 'lucide-react';
+import { LayoutDashboard, ShoppingBag, Users, Truck, Sprout, Menu, X, Bell, ShoppingCart as CartIcon, UserCircle, Wallet } from 'lucide-react';
 import { useNavigate, Link, useSearchParams } from 'react-router';
 import { Dashboard } from './Dashboard';
 import { Marketplace } from './Marketplace';
 import { LaborManagement } from './LaborManagement';
+import { LaborPaymentDashboard } from './LaborPaymentDashboard';
 import { ServicesBooking } from './ServicesBooking';
 import { Profile } from './Profile';
-import { createLaborBooking, getLaborData } from '../../features/app/api';
+import { WalletModal } from './WalletModal';
+import { getCurrentUserProfile, getLaborData, getLaborPaymentStatus } from '../../features/app/api';
 import { Notifications } from './Notifications';
 import { Cart, CartItem } from './Cart';
 import { Receipt, ReceiptData } from './Receipt';
@@ -19,6 +21,7 @@ import {
   getUserInitials,
   getSessionUser,
   isAuthenticated,
+  persistSessionUser,
 } from '../../shared/auth/session';
 import {
   AppNotification,
@@ -297,11 +300,15 @@ export function DashboardApp() {
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [currentReceipt, setCurrentReceipt] = useState<ReceiptData | null>(null);
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
+  const [laborPaymentOpen, setLaborPaymentOpen] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(false);
   const [bookingType, setBookingType] = useState<'labor' | 'service'>('labor');
   const [bookingItem, setBookingItem] = useState<any>(null);
+  const [pendingLaborBooking, setPendingLaborBooking] = useState<any>(null);
   const [sessionUser, setSessionUser] = useState(getSessionUser());
   const loggedIn = isAuthenticated();
   const canUseCommercialFeatures = sessionUser?.canManageCommercialFeatures !== false;
+  const walletBalance = Number(sessionUser?.wallet?.balance || 0);
 
   const tabs = [
     { id: 'dashboard' as TabType, name: 'Dashboard', icon: LayoutDashboard },
@@ -375,6 +382,80 @@ export function DashboardApp() {
     };
   }, [sessionUser?.id]);
 
+  useEffect(() => {
+    if (!sessionUser?.id) {
+      return;
+    }
+
+    const syncWalletAndSession = () => {
+      getCurrentUserProfile()
+        .then(({ user }) => {
+          persistSessionUser(user);
+          setSessionUser(user);
+        })
+        .catch(() => undefined);
+    };
+
+    window.addEventListener('agrihub:labor-bookings-updated', syncWalletAndSession);
+
+    return () => {
+      window.removeEventListener('agrihub:labor-bookings-updated', syncWalletAndSession);
+    };
+  }, [sessionUser?.id]);
+
+  useEffect(() => {
+    const laborPaymentRef = searchParams.get('laborPaymentRef');
+    const laborPaymentState = searchParams.get('laborPaymentState');
+
+    if (!laborPaymentRef || !sessionUser?.id) {
+      return;
+    }
+
+    getLaborPaymentStatus(laborPaymentRef)
+      .then((payload) => {
+        const payment = payload.payment;
+
+        if (payment?.status === 'booking_created' || payment?.status === 'ready_for_release' || payment?.status === 'released') {
+          addStoredNotification(sessionUser.id, {
+            sourceKey: `labor-payment-${laborPaymentRef}`,
+            type: 'success',
+            title: 'Labor payment confirmed',
+            message: `${payment.workerName} booking for ${payment.bookingDate} at ${payment.bookingTime} is now active and paid securely through Xendit.`,
+          });
+          window.dispatchEvent(new Event('agrihub:labor-bookings-updated'));
+        } else if (laborPaymentState === 'failure' || payment?.status === 'failed' || payment?.status === 'expired') {
+          addStoredNotification(sessionUser.id, {
+            sourceKey: `labor-payment-${laborPaymentRef}`,
+            type: 'warning',
+            title: 'Labor payment not completed',
+            message: 'The Xendit payment was not completed, so the labor booking was not activated.',
+          });
+        } else {
+          addStoredNotification(sessionUser.id, {
+            sourceKey: `labor-payment-${laborPaymentRef}`,
+            type: 'info',
+            title: 'Payment is being confirmed',
+            message: 'Xendit is still confirming your labor payment. Your booking will appear once the payment is finalized.',
+          });
+        }
+      })
+      .catch(() => {
+        addStoredNotification(sessionUser.id, {
+          sourceKey: `labor-payment-${laborPaymentRef}`,
+          type: 'warning',
+          title: 'Unable to load payment status',
+          message: 'We could not verify the latest labor payment status right now.',
+        });
+      })
+      .finally(() => {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('laborPaymentRef');
+        nextParams.delete('laborPaymentState');
+        nextParams.set('tab', 'labor');
+        setSearchParams(nextParams, { replace: true });
+      });
+  }, [searchParams, sessionUser?.id, setSearchParams]);
+
   const updateActiveTab = (tab: TabType) => {
     setActiveTab(tab);
     setSearchParams(tab === 'dashboard' ? {} : { tab });
@@ -416,6 +497,11 @@ export function DashboardApp() {
     }
 
     clearStoredNotifications(sessionUser.id);
+  };
+
+  const handleWalletUserUpdated = (user: any) => {
+    persistSessionUser(user);
+    setSessionUser(user);
   };
 
   const addNotification = (notification: Omit<AppNotification, 'id' | 'read' | 'createdAt'> & { createdAt?: string; sourceKey?: string }) => {
@@ -524,14 +610,10 @@ export function DashboardApp() {
 
     try {
       if (bookingType === 'labor') {
-        await createLaborBooking({
-          workerId: bookingItem.workerId,
-          workerType: bookingItem.type,
-          date: bookingData.date,
-          time: bookingData.time,
-          duration: bookingData.duration,
-          location: bookingData.location,
-        });
+        setPendingLaborBooking(bookingData);
+        setBookingModalOpen(false);
+        setLaborPaymentOpen(true);
+        return;
       }
 
       const rate = bookingItem.rate || bookingItem.price;
@@ -540,8 +622,8 @@ export function DashboardApp() {
       const tax = total * 0.08;
       const totalWithTax = total + tax;
       const receipt: ReceiptData = {
-        id: `${bookingType === 'labor' ? 'LAB' : 'SRV'}-${Date.now()}`,
-        type: bookingType === 'labor' ? 'labor' : 'service',
+        id: `SRV-${Date.now()}`,
+        type: 'service',
         date: bookingData.date, time: bookingData.time,
         items: [{ name: bookingData.itemName, quantity: durationHours, unit: 'hours', price: rate, total }],
         subtotal: total, tax, total: totalWithTax, paymentMethod: 'Credit Card', provider: bookingData.provider, buyer: sessionUser?.name || 'Authenticated User',
@@ -549,14 +631,9 @@ export function DashboardApp() {
       setCurrentReceipt(receipt);
       setBookingModalOpen(false);
       setReceiptOpen(true);
-      if (bookingType === 'labor') {
-        window.dispatchEvent(new Event('agrihub:labor-bookings-updated'));
-      }
-      addNotification({ type: 'success', title: `${bookingType === 'labor' ? 'Worker' : 'Service'} Booked`, message: `${bookingData.itemName} booked for ${bookingData.date} at ${bookingData.time}` });
+      addNotification({ type: 'success', title: 'Service Booked', message: `${bookingData.itemName} booked for ${bookingData.date} at ${bookingData.time}` });
       logActivity(
-        bookingType === 'labor'
-          ? `Booked worker ${bookingData.itemName} for ${bookingData.date}`
-          : `Booked service ${bookingData.itemName} for ${bookingData.date}`,
+        `Booked service ${bookingData.itemName} for ${bookingData.date}`,
         'completed',
       );
     } catch (error) {
@@ -639,6 +716,13 @@ export function DashboardApp() {
                       </span>
                     )}
                   </button>
+                  <button
+                    onClick={() => setWalletOpen(true)}
+                    className="hidden md:flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 transition-all duration-200 hover:bg-emerald-100"
+                  >
+                    <Wallet className="h-4 w-4 text-emerald-600" />
+                    <span className="text-sm font-semibold text-emerald-700">{formatPhpCurrency(walletBalance)}</span>
+                  </button>
                   <button onClick={() => updateActiveTab('profile')} className="hidden md:flex items-center space-x-2 hover:bg-gray-100 rounded-xl px-3 py-2 transition-all duration-200">
                     <div className="w-8 h-8 overflow-hidden rounded-full bg-white flex items-center justify-center ring-1 ring-gray-200 shadow-sm">
                       {sessionUser?.profile?.avatarUrl ? (
@@ -691,13 +775,25 @@ export function DashboardApp() {
                 </button>
               ))}
               {loggedIn ? (
-                <button onClick={() => { updateActiveTab('profile'); setMobileMenuOpen(false); }}
-                  className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${
-                    activeTab === 'profile' ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30' : 'text-gray-600 hover:bg-gray-50'
-                  }`}>
-                  <UserCircle className="w-5 h-5" />
-                  <span className="font-medium">Profile</span>
-                </button>
+                <>
+                  <button
+                    onClick={() => { setWalletOpen(true); setMobileMenuOpen(false); }}
+                    className="w-full flex items-center justify-between rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-emerald-700 transition-all duration-200 hover:bg-emerald-100"
+                  >
+                    <span className="flex items-center space-x-3">
+                      <Wallet className="w-5 h-5" />
+                      <span className="font-medium">Wallet</span>
+                    </span>
+                    <span className="text-sm font-semibold">{formatPhpCurrency(walletBalance)}</span>
+                  </button>
+                  <button onClick={() => { updateActiveTab('profile'); setMobileMenuOpen(false); }}
+                    className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-all duration-200 ${
+                      activeTab === 'profile' ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30' : 'text-gray-600 hover:bg-gray-50'
+                    }`}>
+                    <UserCircle className="w-5 h-5" />
+                    <span className="font-medium">Profile</span>
+                  </button>
+                </>
               ) : (
                 <>
                   <button
@@ -740,6 +836,18 @@ export function DashboardApp() {
       <Cart isOpen={cartOpen} onClose={() => setCartOpen(false)} items={cartItems} onUpdateQuantity={handleUpdateQuantity} onRemoveItem={handleRemoveItem} onCheckout={handleCheckout} />
       <Receipt isOpen={receiptOpen} onClose={() => setReceiptOpen(false)} receipt={currentReceipt} />
       <BookingModal isOpen={bookingModalOpen} onClose={() => setBookingModalOpen(false)} type={bookingType} item={bookingItem} onConfirm={handleConfirmBooking} />
+      <LaborPaymentDashboard
+        isOpen={laborPaymentOpen}
+        onClose={() => setLaborPaymentOpen(false)}
+        bookingDraft={pendingLaborBooking}
+        worker={bookingItem}
+      />
+      <WalletModal
+        isOpen={walletOpen}
+        onClose={() => setWalletOpen(false)}
+        sessionUser={sessionUser}
+        onUserUpdated={handleWalletUserUpdated}
+      />
     </div>
   );
 }

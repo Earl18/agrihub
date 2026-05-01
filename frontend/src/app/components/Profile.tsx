@@ -645,6 +645,7 @@ export function Profile() {
         emailChangePending: user.emailChangePending,
         phoneVerification: user.phoneVerification,
         phoneChangePending: user.phoneChangePending,
+        wallet: user.wallet,
       });
       })
       .catch(() => undefined);
@@ -866,6 +867,7 @@ export function Profile() {
         emailChangePending: user.emailChangePending,
         phoneVerification: user.phoneVerification,
         phoneChangePending: user.phoneChangePending,
+        wallet: user.wallet,
       };
       persistSessionUser(nextSessionUser);
       setSessionMeta(nextSessionUser);

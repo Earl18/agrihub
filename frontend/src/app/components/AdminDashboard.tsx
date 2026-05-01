@@ -892,7 +892,7 @@ export function AdminDashboard() {
               </div>
             </div>
             <div className="flex flex-col justify-center gap-3 lg:items-stretch">
-              {booking.status !== 'completed' ? (
+              {booking.status !== 'completed' && booking.status !== 'cancelled' ? (
                 <button
                   onClick={() =>
                     void handleAction(

@@ -1,7 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Calendar, Clock, MapPin, User, Plus, CheckCircle, XCircle, Mail, Phone, Navigation, ChevronDown } from 'lucide-react';
 import { useSearchParams } from 'react-router';
-import { cancelLaborBooking, getLaborData, markLaborBookingOnTheWay, upsertLaborOffer } from '../../features/app/api';
+import {
+  cancelLaborBooking,
+  getLaborData,
+  markLaborBookingCompleted,
+  markLaborBookingOnTheWay,
+  upsertLaborOffer,
+} from '../../features/app/api';
 import { SessionUser } from '../../shared/auth/session';
 import { formatPhpCurrency, formatPhpRate } from '../../shared/format/currency';
 import { addStoredNotification } from '../../shared/notifications/store';
@@ -72,6 +78,11 @@ function normalizeExperienceYears(value: string) {
   return String(value || '').replace(/\D/g, '');
 }
 
+function parseExperienceYears(value: string) {
+  const normalized = Number(normalizeExperienceYears(value));
+  return Number.isFinite(normalized) ? normalized : 0;
+}
+
 function formatExperienceYears(value: string) {
   const normalized = normalizeExperienceYears(value);
   return normalized ? `${normalized} years` : '';
@@ -140,6 +151,23 @@ function formatStatusLabel(value: string) {
     .split('_')
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ');
+}
+
+function isSameDayClientCancellationLocked(booking: any, todayDateValue: string) {
+  return String(booking?.date || '').trim() === todayDateValue;
+}
+
+function canConfirmLaborCompletionToday(booking: any, todayDateValue: string) {
+  const status = String(booking?.status || '').trim().toLowerCase();
+  return String(booking?.date || '').trim() === todayDateValue && status !== 'cancelled' && status !== 'completed';
+}
+
+function hasClientConfirmedCompletion(booking: any) {
+  return Boolean(booking?.completionConfirmation?.clientConfirmedAt);
+}
+
+function hasWorkerConfirmedCompletion(booking: any) {
+  return Boolean(booking?.completionConfirmation?.workerConfirmedAt);
 }
 
 function buildTrackingMapUrl(originLat?: number | null, originLng?: number | null, destination?: string) {
@@ -258,10 +286,13 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
   const [selectedOfferType, setSelectedOfferType] = useState('');
   const [isOfferFormOpen, setIsOfferFormOpen] = useState(false);
   const [openWorkHoursField, setOpenWorkHoursField] = useState<'start' | 'end' | null>(null);
-  const [expandedContactBookingId, setExpandedContactBookingId] = useState('');
+  const [selectedWorkerTypeFilter, setSelectedWorkerTypeFilter] = useState('all');
+  const [selectedAvailabilityFilter, setSelectedAvailabilityFilter] = useState('all');
+  const [selectedSortOption, setSelectedSortOption] = useState<'rating' | 'rate' | 'distance' | 'experience'>('rating');
   const [detailModal, setDetailModal] = useState<{ kind: 'booking' | 'job'; data: any } | null>(null);
   const [trackingBookingId, setTrackingBookingId] = useState('');
   const [cancelingBookingId, setCancelingBookingId] = useState('');
+  const [completingBookingId, setCompletingBookingId] = useState('');
   const [travelStatusMessage, setTravelStatusMessage] = useState('');
   const [travelStatusError, setTravelStatusError] = useState('');
   const [trackingMapError, setTrackingMapError] = useState('');
@@ -280,6 +311,68 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
   const selectedListingExists = Boolean(selectedListing);
 
   const availableSkillOptions = verifiedSkills;
+  const workerTypeOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          availableWorkers.flatMap((worker) => [
+            String(worker.type || '').trim(),
+            ...((Array.isArray(worker.skills) ? worker.skills : [])
+              .map((skill) => String(skill || '').trim())
+              .filter(Boolean)),
+          ]).filter(Boolean),
+        ),
+      ).sort((left, right) => left.localeCompare(right)),
+    [availableWorkers],
+  );
+
+  const filteredAvailableWorkers = useMemo(() => {
+    const nextWorkers = [...availableWorkers]
+      .filter((worker) =>
+        selectedWorkerTypeFilter === 'all'
+          ? true
+          : String(worker.type || '').trim() === selectedWorkerTypeFilter
+            || (Array.isArray(worker.skills) && worker.skills.some((skill: string) => String(skill || '').trim() === selectedWorkerTypeFilter)),
+      )
+      .filter((worker) =>
+        selectedAvailabilityFilter === 'all'
+          ? true
+          : String(worker.availability || '').trim().toLowerCase() === selectedAvailabilityFilter,
+      );
+
+    nextWorkers.sort((left, right) => {
+      if (selectedSortOption === 'rate') {
+        return Number(left.rate || 0) - Number(right.rate || 0);
+      }
+
+      if (selectedSortOption === 'distance') {
+        const leftDistance = Number.parseFloat(String(left.distance || '').replace(/[^\d.]/g, ''));
+        const rightDistance = Number.parseFloat(String(right.distance || '').replace(/[^\d.]/g, ''));
+
+        if (Number.isFinite(leftDistance) && Number.isFinite(rightDistance)) {
+          return leftDistance - rightDistance;
+        }
+
+        if (Number.isFinite(leftDistance)) {
+          return -1;
+        }
+
+        if (Number.isFinite(rightDistance)) {
+          return 1;
+        }
+
+        return 0;
+      }
+
+      if (selectedSortOption === 'experience') {
+        return parseExperienceYears(right.experience) - parseExperienceYears(left.experience);
+      }
+
+      return Number(right.rating || 0) - Number(left.rating || 0);
+    });
+
+    return nextWorkers;
+  }, [availableWorkers, selectedAvailabilityFilter, selectedSortOption, selectedWorkerTypeFilter]);
 
   const loadLaborData = () => {
     getLaborData()
@@ -288,7 +381,7 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
           const nextListings = Array.isArray(laborProfile?.listings) ? laborProfile.listings : [];
           setAvailableWorkers(payload.availableWorkers || []);
           setViewerProvince(String(payload.viewerProvince || '').trim());
-          setActiveBookings(payload.activeBookings || []);
+        setActiveBookings(payload.activeBookings || []);
         setBookingHistory(payload.bookingHistory || []);
         setCanOfferLabor(Boolean(payload.canOfferLabor));
         setMyLaborProfile(laborProfile);
@@ -531,8 +624,16 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
     setIsOfferFormOpen(false);
   };
 
-  const handleToggleContactDetails = (bookingId: string) => {
-    setExpandedContactBookingId((current) => (current === bookingId ? '' : bookingId));
+  const handleCallLaborer = (booking: any) => {
+    const phoneNumber = String(booking?.workerPhone || '').trim();
+
+    if (!phoneNumber) {
+      setTravelStatusError('No laborer phone number is available for this booking right now.');
+      return;
+    }
+
+    const normalizedPhoneNumber = phoneNumber.replace(/[^\d+]/g, '');
+    window.location.href = `tel:${normalizedPhoneNumber || phoneNumber}`;
   };
 
   const handleOpenBookingDetails = (booking: any) => {
@@ -598,13 +699,19 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
       return;
     }
 
+    if (isSameDayClientCancellationLocked(booking, todayDateValue)) {
+      setTravelStatusError(
+        'This labor booking can no longer be cancelled on the booking date. The booked time remains payable whether the client is present or not.',
+      );
+      return;
+    }
+
     setTravelStatusError('');
     setTravelStatusMessage('');
     setCancelingBookingId(bookingId);
 
     try {
       const response = await cancelLaborBooking(bookingId);
-      setExpandedContactBookingId((current) => (current === booking.id ? '' : current));
       setDetailModal((current) =>
         current?.data?.bookingId === bookingId ? null : current,
       );
@@ -625,6 +732,44 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
       );
     } finally {
       setCancelingBookingId('');
+    }
+  };
+
+  const handleConfirmBookingCompleted = async (booking: any) => {
+    const bookingId = String(booking?.bookingId || '').trim();
+
+    if (!bookingId || completingBookingId) {
+      return;
+    }
+
+    if (!canConfirmLaborCompletionToday(booking, todayDateValue)) {
+      setTravelStatusError('Labor bookings can only be marked as completed on the booked date.');
+      return;
+    }
+
+    setTravelStatusError('');
+    setTravelStatusMessage('');
+    setCompletingBookingId(bookingId);
+
+    try {
+      const response = await markLaborBookingCompleted(bookingId);
+      setDetailModal((current) =>
+        current?.data?.bookingId === bookingId
+          ? {
+              ...current,
+              data: response.booking || current.data,
+            }
+          : current,
+      );
+      setTravelStatusMessage(response.message || 'Labor booking completion updated successfully.');
+      loadLaborData();
+      window.dispatchEvent(new Event('agrihub:labor-bookings-updated'));
+    } catch (error) {
+      setTravelStatusError(
+        error instanceof Error ? error.message : 'Unable to update labor booking completion right now.',
+      );
+    } finally {
+      setCompletingBookingId('');
     }
   };
 
@@ -720,40 +865,51 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
         )}
       </div>
 
-      {activeTab === 'book' && (
-        <>
-          <div className="bg-white rounded-lg shadow p-4">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <select className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
-                <option>All Types</option>
-                <option>Harvester</option>
-                <option>Planter</option>
-                <option>Irrigator</option>
-                <option>General Labor</option>
-              </select>
-              <select className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
-                <option>All Availability</option>
-                <option>Available</option>
-                <option>Busy</option>
-              </select>
-              <select className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
-                <option>Sort by: Rating</option>
-                <option>Sort by: Rate</option>
-                <option>Sort by: Distance</option>
-                <option>Sort by: Experience</option>
-              </select>
-              <button className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center justify-center space-x-2">
-                <Plus className="w-4 h-4" />
-                <span>Quick Book Team</span>
-              </button>
+        {activeTab === 'book' && (
+          <>
+            <div className="bg-white rounded-lg shadow p-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <select
+                  value={selectedWorkerTypeFilter}
+                  onChange={(event) => setSelectedWorkerTypeFilter(event.target.value)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="all">All Types</option>
+                  {workerTypeOptions.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={selectedAvailabilityFilter}
+                  onChange={(event) => setSelectedAvailabilityFilter(event.target.value)}
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="all">All Availability</option>
+                  <option value="available">Available</option>
+                  <option value="busy">Busy</option>
+                </select>
+                <select
+                  value={selectedSortOption}
+                  onChange={(event) =>
+                    setSelectedSortOption(event.target.value as 'rating' | 'rate' | 'distance' | 'experience')
+                  }
+                  className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="rating">Sort by: Rating</option>
+                  <option value="rate">Sort by: Rate</option>
+                  <option value="distance">Sort by: Distance</option>
+                  <option value="experience">Sort by: Experience</option>
+                </select>
+              </div>
             </div>
-          </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {availableWorkers.map((worker) => (
-              <div
-                key={worker.id}
-                className="rounded-2xl border border-gray-200 bg-white p-6 transition-colors hover:border-green-500"
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {filteredAvailableWorkers.map((worker) => (
+                <div
+                  key={worker.id}
+                  className="rounded-2xl border border-gray-200 bg-white p-6 transition-colors hover:border-green-500"
               >
                 <div className="mb-4 flex items-start justify-between gap-4">
                   <div className="flex items-start space-x-4">
@@ -821,7 +977,7 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
                 </div>
               </div>
             ))}
-              {availableWorkers.length === 0 && (
+              {filteredAvailableWorkers.length === 0 && (
                   <div className="lg:col-span-2 rounded-xl border border-dashed border-gray-200 bg-white p-8 text-center text-sm text-gray-500">
                     {!currentUser
                       ? 'No labor offers are available to book right now.'
@@ -856,8 +1012,8 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
               )}
               {activeBookings.map((booking) => (
                 <div key={booking.id} className="border border-gray-200 rounded-lg p-4 hover:border-green-500 transition-colors">
-                  <div className="flex flex-col md:flex-row md:items-center justify-between">
-                    <div className="flex-1">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                    <div className="min-w-0">
                       <div className="flex items-center space-x-3 mb-3">
                         <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
                           <User className="w-5 h-5 text-green-600" />
@@ -872,68 +1028,83 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
                           {formatStatusLabel(booking.status)}
                         </span>
                       </div>
-                      <div className="grid grid-cols-2 gap-4 text-sm">
-                        <div className="flex items-center text-gray-600">
+                      <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_240px]">
+                        <div className="flex items-center text-gray-600 min-w-0">
                           <Calendar className="w-4 h-4 mr-2" />
                           <span>{booking.date}</span>
                         </div>
-                        <div className="flex items-center text-gray-600">
+                        <div className="flex items-center text-gray-600 min-w-0">
                           <Clock className="w-4 h-4 mr-2" />
                           <span>{formatBookingTimeLabel(booking.time)} ({booking.duration})</span>
                         </div>
-                        <div className="flex items-center text-gray-600">
-                          <MapPin className="w-4 h-4 mr-2" />
-                          <span>{booking.location}</span>
+                        <div className="flex items-start text-gray-600 min-w-0 md:col-span-2 xl:col-span-1">
+                          <MapPin className="w-4 h-4 mr-2 mt-0.5 shrink-0" />
+                          <span className="min-w-0">{booking.location}</span>
                         </div>
-                        <div className="flex items-center text-gray-600">
+                        <div className="flex items-center text-gray-600 min-w-0">
                           <span className="font-semibold text-green-600">{formatPhpRate(booking.rate, 'hour', { shortHour: true })}</span>
                         </div>
                       </div>
                     </div>
-                    <div className="mt-4 md:mt-0 flex space-x-2">
+                    <div className="grid gap-2 sm:grid-cols-2 lg:w-[320px] lg:self-center">
                       <button
                         type="button"
                         onClick={() => handleOpenBookingDetails(booking)}
-                        className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg text-center hover:bg-gray-50 sm:col-start-1 sm:row-start-1"
                       >
                         View Details
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleToggleContactDetails(booking.id)}
-                        className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                        onClick={() => handleCallLaborer(booking)}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg text-center hover:bg-gray-50 sm:col-start-2 sm:row-start-1"
                       >
                         Contact
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleCancelBooking(booking)}
-                        disabled={cancelingBookingId === booking.bookingId}
-                        className="px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        {cancelingBookingId === booking.bookingId ? 'Cancelling...' : 'Cancel'}
-                      </button>
+                      {canConfirmLaborCompletionToday(booking, todayDateValue) ? (
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmBookingCompleted(booking)}
+                          disabled={completingBookingId === booking.bookingId || hasClientConfirmedCompletion(booking)}
+                          className="w-full px-4 py-2 bg-green-50 text-green-700 rounded-lg text-center hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60 sm:col-start-1 sm:row-start-2"
+                        >
+                          {completingBookingId === booking.bookingId
+                            ? 'Saving...'
+                            : hasClientConfirmedCompletion(booking)
+                              ? hasWorkerConfirmedCompletion(booking)
+                                ? 'Completed'
+                                : 'Waiting for laborer'
+                              : 'Mark Completed'}
+                        </button>
+                      ) : null}
+                      {isSameDayClientCancellationLocked(booking, todayDateValue) ? (
+                        <span className="inline-flex w-full items-center justify-center rounded-lg bg-amber-50 px-4 py-2 text-sm text-amber-700 sm:col-start-2 sm:row-start-2">
+                          Booking day locked
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelBooking(booking)}
+                          disabled={cancelingBookingId === booking.bookingId}
+                          className="w-full px-4 py-2 bg-red-50 text-red-600 rounded-lg text-center hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 sm:col-start-2 sm:row-start-2"
+                        >
+                          {cancelingBookingId === booking.bookingId ? 'Cancelling...' : 'Cancel'}
+                        </button>
+                      )}
                     </div>
                   </div>
-                  {expandedContactBookingId === booking.id ? (
-                    <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-                      <h5 className="text-sm font-semibold text-gray-900">Laborer contact details</h5>
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                        <div className="flex items-center gap-3 rounded-xl bg-white px-4 py-3">
-                          <Mail className="h-4 w-4 text-green-600" />
-                          <div>
-                            <p className="text-xs uppercase tracking-wide text-gray-400">Email</p>
-                            <p className="text-sm font-medium text-gray-900">{booking.workerEmail || 'No email available'}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3 rounded-xl bg-white px-4 py-3">
-                          <Phone className="h-4 w-4 text-green-600" />
-                          <div>
-                            <p className="text-xs uppercase tracking-wide text-gray-400">Phone</p>
-                            <p className="text-sm font-medium text-gray-900">{booking.workerPhone || 'No phone available'}</p>
-                          </div>
-                        </div>
-                      </div>
+                  {isSameDayClientCancellationLocked(booking, todayDateValue) ? (
+                    <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                      This booking can no longer be cancelled on the booking date. The booked time remains payable whether the client is present or not.
+                    </div>
+                  ) : null}
+                  {canConfirmLaborCompletionToday(booking, todayDateValue) ? (
+                    <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                      {hasClientConfirmedCompletion(booking)
+                        ? hasWorkerConfirmedCompletion(booking)
+                          ? 'Both sides have confirmed this booking as completed.'
+                          : 'You already marked this booking as completed. Waiting for the laborer to confirm.'
+                        : 'Mark this booking as completed after the work is done. The laborer must confirm too before both records move to history.'}
                     </div>
                   ) : null}
                   {booking.date === todayDateValue && booking.travelTracking?.isOnTheWay ? (
@@ -1079,11 +1250,11 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
           <div className="bg-white rounded-lg shadow p-6">
             <div className="mb-4 flex items-center justify-between gap-4">
               <h3 className="text-lg font-semibold">My Existing Labor Listings</h3>
-              <button
-                type="button"
-                onClick={handleOpenCreateForm}
-                className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700"
-              >
+                <button
+                  type="button"
+                  onClick={handleOpenCreateForm}
+                  className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-700"
+                >
                 <Plus className="h-4 w-4" />
                 <span>Create labor listing</span>
               </button>
@@ -1390,6 +1561,22 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
                       >
                         View Details
                       </button>
+                      {canConfirmLaborCompletionToday(job, todayDateValue) ? (
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmBookingCompleted(job)}
+                          disabled={completingBookingId === job.bookingId || hasWorkerConfirmedCompletion(job)}
+                          className="rounded-lg bg-green-50 px-4 py-2 text-sm font-medium text-green-700 transition-colors hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {completingBookingId === job.bookingId
+                            ? 'Saving...'
+                            : hasWorkerConfirmedCompletion(job)
+                              ? hasClientConfirmedCompletion(job)
+                                ? 'Completed'
+                                : 'Waiting for client'
+                              : 'Mark Completed'}
+                        </button>
+                      ) : null}
                       {job.date === todayDateValue && job.status !== 'on_the_way' ? (
                         <button
                           type="button"
@@ -1408,6 +1595,15 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
                   {job.date === todayDateValue && job.status === 'on_the_way' ? (
                     <p className="mt-3 text-sm text-green-700">
                       Your client can now view your live travel location for today&apos;s booking.
+                    </p>
+                  ) : null}
+                  {canConfirmLaborCompletionToday(job, todayDateValue) ? (
+                    <p className="mt-3 text-sm text-green-700">
+                      {hasWorkerConfirmedCompletion(job)
+                        ? hasClientConfirmedCompletion(job)
+                          ? 'Both sides have confirmed this booking as completed.'
+                          : 'You already marked this booking as completed. Waiting for the client to confirm.'
+                        : 'Mark this booking as completed after the work is done. The client must confirm too before both records move to history.'}
                     </p>
                   ) : null}
                 </div>
@@ -1685,12 +1881,72 @@ export function LaborManagement({ onBookWorker, currentUser }: LaborManagementPr
                 </div>
               ) : null}
 
-              <div className="flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => setDetailModal(null)}
-                  className="rounded-2xl bg-green-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-700"
-                >
+              {canConfirmLaborCompletionToday(detailModal.data, todayDateValue) ? (
+                <div className="rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                  {detailModal.kind === 'booking'
+                    ? hasClientConfirmedCompletion(detailModal.data)
+                      ? hasWorkerConfirmedCompletion(detailModal.data)
+                        ? 'Both sides have confirmed this booking as completed.'
+                        : 'You already confirmed this booking as completed. Waiting for the laborer to confirm too.'
+                      : 'Mark this booking as completed after the work is done. The laborer must confirm too before both records move to history.'
+                    : hasWorkerConfirmedCompletion(detailModal.data)
+                      ? hasClientConfirmedCompletion(detailModal.data)
+                        ? 'Both sides have confirmed this booking as completed.'
+                        : 'You already confirmed this booking as completed. Waiting for the client to confirm too.'
+                      : 'Mark this booking as completed after the work is done. The client must confirm too before both records move to history.'}
+                </div>
+              ) : null}
+
+                <div className="flex flex-wrap justify-end gap-3">
+                  {(detailModal.kind === 'booking' || detailModal.kind === 'job') &&
+                  canConfirmLaborCompletionToday(detailModal.data, todayDateValue) ? (
+                    <button
+                      type="button"
+                      onClick={() => handleConfirmBookingCompleted(detailModal.data)}
+                      disabled={
+                        completingBookingId === detailModal.data.bookingId ||
+                        (detailModal.kind === 'booking'
+                          ? hasClientConfirmedCompletion(detailModal.data)
+                          : hasWorkerConfirmedCompletion(detailModal.data))
+                      }
+                      className="rounded-2xl bg-green-50 px-5 py-2.5 text-sm font-medium text-green-700 transition-colors hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {completingBookingId === detailModal.data.bookingId
+                        ? 'Saving...'
+                        : detailModal.kind === 'booking'
+                          ? hasClientConfirmedCompletion(detailModal.data)
+                            ? hasWorkerConfirmedCompletion(detailModal.data)
+                              ? 'Completed'
+                              : 'Waiting for laborer'
+                            : 'Mark Completed'
+                          : hasWorkerConfirmedCompletion(detailModal.data)
+                            ? hasClientConfirmedCompletion(detailModal.data)
+                              ? 'Completed'
+                              : 'Waiting for client'
+                            : 'Mark Completed'}
+                    </button>
+                  ) : null}
+                  {detailModal.kind === 'booking' && detailModal.data.status !== 'cancelled' ? (
+                    isSameDayClientCancellationLocked(detailModal.data, todayDateValue) ? (
+                      <div className="mr-auto rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+                        Booking-day cancellations are locked. This time remains payable.
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleCancelBooking(detailModal.data)}
+                        disabled={cancelingBookingId === detailModal.data.bookingId}
+                        className="rounded-2xl bg-red-50 px-5 py-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {cancelingBookingId === detailModal.data.bookingId ? 'Cancelling...' : 'Cancel Booking'}
+                      </button>
+                    )
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => setDetailModal(null)}
+                    className="rounded-2xl bg-green-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-700"
+                  >
                   Done
                 </button>
               </div>

@@ -4,6 +4,25 @@ export function getCurrentUserProfile() {
   return apiRequest<any>('/data/me');
 }
 
+export function getWalletSummary() {
+  return apiRequest<{ wallet: any }>('/data/wallet');
+}
+
+export function requestWalletCashOut(payload: {
+  amount: number;
+  method: 'gcash' | 'paymaya' | 'card';
+  accountName?: string;
+  mobileNumber?: string;
+  cardholderName?: string;
+  cardBrand?: string;
+  cardLast4?: string;
+}) {
+  return apiRequest<{ message: string; wallet: any; user: any }>('/data/wallet/cashout', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
 export function updateCurrentUserProfile(payload: any) {
   return apiRequest<any>('/data/me', {
     method: 'PUT',
@@ -77,6 +96,31 @@ export function createLaborBooking(payload: {
   });
 }
 
+export function createLaborPaymentCheckout(payload: {
+  workerId: string;
+  workerType: string;
+  date: string;
+  time: string;
+  duration: string;
+  location: string;
+  paymentMethod: 'gcash' | 'maya' | 'card';
+}) {
+  return apiRequest<{
+    message: string;
+    payment: any;
+    checkoutUrl: string;
+  }>('/data/labor/payment/checkout', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export function getLaborPaymentStatus(reference: string) {
+  return apiRequest<{
+    payment: any;
+  }>(`/data/labor/payment/${reference}`);
+}
+
 export function markLaborBookingOnTheWay(
   bookingId: string,
   payload: {
@@ -87,6 +131,12 @@ export function markLaborBookingOnTheWay(
   return apiRequest<{ message: string; booking: any }>(`/data/labor/book/${bookingId}/on-the-way`, {
     method: 'PATCH',
     body: payload,
+  });
+}
+
+export function markLaborBookingCompleted(bookingId: string) {
+  return apiRequest<{ message: string; booking: any; completed: boolean }>(`/data/labor/book/${bookingId}/complete`, {
+    method: 'PATCH',
   });
 }
 

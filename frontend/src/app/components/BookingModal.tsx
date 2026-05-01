@@ -157,6 +157,17 @@ function formatDurationLabel(hours: number) {
   return `${hours} ${hours === 1 ? 'hour' : 'hours'}`;
 }
 
+function getDurationHours(value: string) {
+  const match = String(value || '').trim().match(/^(\d+)\s*hour/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function getLocalDateInputValue() {
   const now = new Date();
   const year = now.getFullYear();
@@ -223,6 +234,36 @@ function formatBookingTimeLabel(value: string) {
   return `${normalizedHours}:${String(minutes).padStart(2, '0')} ${period}`;
 }
 
+function hasBookedTimeConflict(
+  bookedSlots: any[],
+  date: string,
+  requestedStartMinutes: number,
+  requestedDurationHours: number,
+) {
+  const normalizedDate = String(date || '').trim();
+  const requestedEndMinutes = requestedStartMinutes + requestedDurationHours * 60;
+
+  return bookedSlots.some((slot) => {
+    if (!slot || String(slot.date || '').trim() !== normalizedDate) {
+      return false;
+    }
+
+    if (String(slot.status || '').trim().toLowerCase() === 'cancelled') {
+      return false;
+    }
+
+    const existingStartMinutes = convertClockTimeToMinutes(String(slot.time || '').trim());
+    const existingDurationHours = getDurationHours(String(slot.duration || '').trim());
+
+    if (existingStartMinutes === null || existingDurationHours === null) {
+      return false;
+    }
+
+    const existingEndMinutes = existingStartMinutes + existingDurationHours * 60;
+    return requestedStartMinutes <= existingEndMinutes && existingStartMinutes <= requestedEndMinutes;
+  });
+}
+
 function formatPlaceLocation(
   place: { name?: string; formatted_address?: string } | null | undefined,
   typedQuery?: string,
@@ -236,14 +277,6 @@ function formatPlaceLocation(
   }
 
   if (!placeName) {
-    if (
-      preservedQuery &&
-      formattedAddress &&
-      !formattedAddress.toLowerCase().includes(preservedQuery.toLowerCase())
-    ) {
-      return `${preservedQuery}, ${formattedAddress}`;
-    }
-
     return formattedAddress;
   }
 
@@ -268,6 +301,31 @@ function formatPlaceLocation(
   }
 
   return `${placeName}, ${formattedAddress}`;
+}
+
+function getPlaceDetails(googleApi: any, placeId: string) {
+  return new Promise<{ name?: string; formatted_address?: string } | null>((resolve) => {
+    if (!googleApi?.maps?.places?.PlacesService || !placeId) {
+      resolve(null);
+      return;
+    }
+
+    const service = new googleApi.maps.places.PlacesService(document.createElement('div'));
+    service.getDetails(
+      {
+        placeId,
+        fields: ['name', 'formatted_address'],
+      },
+      (result: any, status: any) => {
+        if (status === googleApi.maps.places.PlacesServiceStatus.OK && result) {
+          resolve(result);
+          return;
+        }
+
+        resolve(null);
+      },
+    );
+  });
 }
 
 function loadGoogleMapsPlacesScript() {
@@ -313,6 +371,7 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
   const workingHoursEnd = normalizeClockTime(item?.workingHoursEnd || '');
   const workingHoursStartMinutes = convertClockTimeToMinutes(workingHoursStart);
   const workingHoursEndMinutes = convertClockTimeToMinutes(workingHoursEnd);
+  const bookedSlots = Array.isArray(item?.bookedSlots) ? item.bookedSlots : [];
   const locationInputRef = useRef<HTMLInputElement | null>(null);
   const autocompleteInstanceRef = useRef<any>(null);
   const latestLocationQueryRef = useRef('');
@@ -327,6 +386,26 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
   const [isCloseConfirmOpen, setIsCloseConfirmOpen] = useState(false);
   const currentLocalTimeMinutes = getCurrentLocalTimeMinutes();
   const isSelectedDateToday = formData.date === today;
+  const canBookStartAtTime = (startMinutes: number) => {
+    if (
+      !isLaborBooking
+      || workingHoursEndMinutes === null
+      || !formData.date
+      || startMinutes >= workingHoursEndMinutes
+    ) {
+      return false;
+    }
+
+    const maxDurationHours = Math.floor((workingHoursEndMinutes - startMinutes) / 60);
+
+    if (maxDurationHours <= 0) {
+      return false;
+    }
+
+    return Array.from({ length: maxDurationHours }, (_, index) => index + 1).some(
+      (durationHours) => !hasBookedTimeConflict(bookedSlots, formData.date, startMinutes, durationHours),
+    );
+  };
   const availableTimeOptions = isLaborBooking && workingHoursStart && workingHoursEnd
     ? bookingTimeOptions.filter((timeOption) => {
         const optionMinutes = convertClockTimeToMinutes(timeOption);
@@ -337,7 +416,8 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
           workingHoursEndMinutes !== null &&
           optionMinutes >= workingHoursStartMinutes &&
           optionMinutes <= workingHoursEndMinutes &&
-          (!isSelectedDateToday || optionMinutes > currentLocalTimeMinutes)
+          (!isSelectedDateToday || optionMinutes > currentLocalTimeMinutes) &&
+          canBookStartAtTime(optionMinutes)
         );
       })
     : bookingTimeOptions;
@@ -348,6 +428,7 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
           (_, offset) => workingHoursStartMinutes + offset,
         )
           .filter((totalMinutes) => !isSelectedDateToday || totalMinutes > currentLocalTimeMinutes)
+          .filter((totalMinutes) => canBookStartAtTime(totalMinutes))
           .map((totalMinutes) => getCustomTimePartsFromMinutes(totalMinutes))
           .filter((entry): entry is NonNullable<ReturnType<typeof getCustomTimePartsFromMinutes>> => Boolean(entry))
       : [];
@@ -384,6 +465,7 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
           },
           (_, index) => index + 1,
         )
+          .filter((hours) => formData.date && !hasBookedTimeConflict(bookedSlots, formData.date, laborDurationBaseMinutes, hours))
       : [];
   const hasUnsavedBookingChanges = Object.values(formData).some((value) => String(value || '').trim().length > 0);
   const customTimePickerClassName =
@@ -410,6 +492,7 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
 
   useEffect(() => {
     setLocationMode(isLaborBooking ? 'loading' : 'fallback');
+    autocompleteInstanceRef.current = null;
   }, [isLaborBooking, item?.id, isOpen]);
 
   useEffect(() => {
@@ -417,6 +500,7 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
       return;
     }
 
+    autocompleteInstanceRef.current = null;
     setFormData(emptyBookingForm);
     setCustomTimeParts(emptyCustomTimeParts);
     setIsCalendarOpen(false);
@@ -486,13 +570,17 @@ export function BookingModal({ isOpen, onClose, type, item, onConfirm }: Booking
         }
 
         const autocomplete = new googleApi.maps.places.Autocomplete(locationInputRef.current, {
-          fields: ['formatted_address', 'name'],
+          fields: ['formatted_address', 'name', 'place_id'],
           componentRestrictions: { country: 'ph' },
         });
 
-        autocomplete.addListener('place_changed', () => {
+        autocomplete.addListener('place_changed', async () => {
           const place = autocomplete.getPlace();
-          const nextLocation = formatPlaceLocation(place, latestLocationQueryRef.current);
+          const detailedPlace =
+            !String(place?.name || '').trim() && String(place?.place_id || '').trim()
+              ? await getPlaceDetails(googleApi, String(place.place_id).trim())
+              : null;
+          const nextLocation = formatPlaceLocation(detailedPlace || place, latestLocationQueryRef.current);
 
           if (nextLocation) {
             setFormData((current) => ({

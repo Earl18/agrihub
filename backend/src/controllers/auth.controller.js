@@ -52,6 +52,31 @@ function buildPhoneVerificationState(user) {
   };
 }
 
+function buildWalletSummary(user) {
+  const wallet = user?.wallet || {};
+  const transactions = Array.isArray(wallet?.transactions) ? wallet.transactions : [];
+
+  return {
+    balance: Number(wallet?.balance || 0),
+    totalEarned: Number(wallet?.totalEarned || 0),
+    totalWithdrawn: Number(wallet?.totalWithdrawn || 0),
+    transactions: transactions
+      .map((transaction) => ({
+        id: String(transaction?.id || '').trim(),
+        type: String(transaction?.type || '').trim(),
+        amount: Number(transaction?.amount || 0),
+        status: String(transaction?.status || 'completed').trim(),
+        method: String(transaction?.method || '').trim(),
+        description: String(transaction?.description || '').trim(),
+        reference: String(transaction?.reference || '').trim(),
+        destinationLabel: String(transaction?.destinationLabel || '').trim(),
+        createdAt: transaction?.createdAt || null,
+      }))
+      .filter((transaction) => transaction.id)
+      .sort((left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()),
+  };
+}
+
 async function sanitizeUser(user) {
   return {
     id: user._id.toString(),
@@ -77,6 +102,7 @@ async function sanitizeUser(user) {
         }
       : null,
     phoneVerification: buildPhoneVerificationState(user),
+    wallet: buildWalletSummary(user),
     profile: await sanitizeProfile(user.profile),
   };
 }
